@@ -1,0 +1,35 @@
+{
+  "name": "@red-cup-engineering/hive-auto-ledger-cli",
+  "version": "0.1.11",
+  "description": "Composed CLI face for the Hive wallet-analyzer lineage: reads one account's mainchain and Hive-Engine history, derives its Beancount ledger, checks it with farolfi, and runs farolfi's balance and valuation reports over it.",
+  "type": "module",
+  "private": false,
+  "license": "UNLICENSED",
+  "exports": "./hive-auto-ledger-cli.mjs",
+  "bin": {
+    "hive-auto-ledger-cli": "hive-auto-ledger-cli.mjs"
+  },
+  "files": [
+    "hive-auto-ledger-cli.mjs",
+    "README.md",
+    "package.json"
+  ],
+  "dependencies": {
+    "@red-cup-engineering/metrologic": "workspace:*",
+    "@red-cup-engineering/derive-hive-account-ledger-service": "workspace:*",
+    "@red-cup-engineering/farolfi": "workspace:*",
+    "@red-cup-engineering/computer-file-engineering-services-section": "workspace:*",
+    "@red-cup-engineering/hive-blockchain-client-service": "workspace:*",
+    "@red-cup-engineering/read-hive-account-history-service": "workspace:*",
+    "@red-cup-engineering/read-hive-engine-account-history-service": "workspace:*",
+    "@red-cup-engineering/exact-number-data-service": "workspace:*"
+  },
+  "scripts": {
+    "check": "node --check hive-auto-ledger-cli.mjs",
+    "test": "node --test test/*.test.mjs",
+    "pack:dry-run": "npm pack --dry-run --ignore-scripts"
+  },
+  "engines": {
+    "node": ">=24.2.0"
+  }
+}
