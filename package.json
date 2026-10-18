@@ -2,6 +2,11 @@
   "name": "@red-cup-engineering/hive-auto-ledger-cli",
   "version": "0.1.11",
   "description": "Composed CLI face for the Hive wallet-analyzer lineage: reads one account's mainchain and Hive-Engine history, derives its Beancount ledger, checks it with farolfi, and runs farolfi's balance and valuation reports over it.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/computer-systems-engineering-services-section.git",
+    "directory": "services/computer-blockchain-system-services-section/services/hive-engineering-services-section/services/hive-ledger-services-section/apps"
+  },
   "type": "module",
   "private": false,
   "license": "UNLICENSED",
