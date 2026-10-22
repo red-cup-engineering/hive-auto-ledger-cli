@@ -6,8 +6,7 @@
  * and valuation reports over it.
  */
 import { parseArgs } from "node:util";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import { writeFileText } from "@red-cup-engineering/computer-file-engineering-services-section/write-file";
 import { HiveClient } from "@red-cup-engineering/hive-blockchain-client-service";
 import { readHiveAccountHistory } from "@red-cup-engineering/read-hive-account-history-service";
@@ -21,8 +20,6 @@ import {
 import { EngineClient } from "@red-cup-engineering/hive-blockchain-client-service/engine.mjs";
 import { dispatch, parseCli } from "@red-cup-engineering/farolfi";
 
-/** This app's owning section root (apps/ -> hive-ledger-services-section -> services -> hive-services-section). */
-const SECTION_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const DEFAULT_HIVE_NODES = ["https://api.hive.blog", "https://api.openhive.network"];
 const DEFAULT_HE_NODES = ["https://accounts.hive-engine.com", "https://history.hive-engine.com"];
 const DEFAULT_HE_FILL_NODES = ["https://api.hive-engine.com/rpc", "https://api2.hive-engine.com/rpc"];
@@ -32,15 +29,34 @@ function capitalized(name) {
 }
 
 /**
- * The lawful dated-records path for one derived Hive account ledger: a derived ledger is a
- * dated record (never a log), so it lands under this owning section's own `data/records/`,
- * never an invented `data/logs/ledgers/` directory.
- * @param {string} account
- * @param {string} dateStamp - YYYY-MM-DD, normally the derivation's rangeEnd.
+ * Resolve the dated-record output directory ONLY when an output is requested.
+ * The installed package must never infer a writable enterprise records directory from
+ * its location in a pnpm/Guix/npm store. An explicit directory wins; otherwise use
+ * HIVE_AUTO_LEDGER_RECORDS_DIR or the already-configured MetroPlat web-data records area.
+ * @param {string} account - Hive account name, not a filesystem path
+ * @param {string} dateStamp - YYYY-MM-DD
+ * @param {{ recordsDirectory?: string, environment?: Record<string,string|undefined> }} [options]
  * @returns {string} absolute path
  */
-export function defaultLedgerRecordsPath(account, dateStamp) {
-  return join(SECTION_ROOT, "data", "records", `${dateStamp}-${account}-hive-account-ledger.beancount`);
+export function defaultLedgerRecordsPath(account, dateStamp, {
+  recordsDirectory,
+  environment = process.env,
+} = {}) {
+  if (typeof account !== "string" || !/^[a-z][a-z0-9.-]{2,15}$/.test(account)) {
+    throw new TypeError("hive-auto-ledger-cli: invalid Hive account name for records path");
+  }
+  if (typeof dateStamp !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStamp) ||
+      !Number.isFinite(Date.parse(`${dateStamp}T00:00:00.000Z`)) ||
+      new Date(`${dateStamp}T00:00:00.000Z`).toISOString().slice(0, 10) !== dateStamp) {
+    throw new TypeError("hive-auto-ledger-cli: records date must be a valid YYYY-MM-DD");
+  }
+  const dir = recordsDirectory ?? environment?.HIVE_AUTO_LEDGER_RECORDS_DIR ??
+    (environment?.METROPLAT_WEB_DATA_DIR ?
+      join(environment.METROPLAT_WEB_DATA_DIR, "records", "hive-account-ledger-records") : undefined);
+  if (typeof dir !== "string" || !dir.trim()) {
+    throw new TypeError("hive-auto-ledger-cli: specify --out, --records-dir, HIVE_AUTO_LEDGER_RECORDS_DIR, or METROPLAT_WEB_DATA_DIR");
+  }
+  return join(resolve(dir), `${dateStamp}-${account}-hive-account-ledger.beancount`);
 }
 
 /** The house per-persona custody account names this section's naming pattern already uses. */
@@ -196,16 +212,17 @@ export async function deriveLedgerForAccount(options, deps = {}) {
 /**
  * Compose the full lot: derive the ledger, write it, check it with farolfi, and run
  * farolfi's balance/valuation reports over it.
- * @param {{ account: string, rangeStart?: string, rangeEnd?: string, out?: string }} options - when
- *   `out` is omitted, the ledger lands at this section's own lawful dated-records path
- *   (`defaultLedgerRecordsPath`) rather than an invented location; pass `out` only to override
- *   for a test or an ad hoc one-off run.
+ * @param {{ account: string, rangeStart?: string, rangeEnd?: string, out?: string,
+ *   recordsDirectory?: string, environment?: Record<string,string|undefined> }} options
+ *   Supply `out` or a configured records directory for installation-independent writes.
  * @param {object} [deps] see `deriveLedgerForAccount`
  * @returns {Promise<object>} includes `out`, the path actually written.
  */
 export async function runHiveAutoLedger(options, deps = {}) {
   const composed = await deriveLedgerForAccount(options, deps);
-  const out = options.out ?? defaultLedgerRecordsPath(composed.chainAccount.name, composed.rangeEnd);
+  const out = options.out ?? defaultLedgerRecordsPath(composed.chainAccount.name, composed.rangeEnd, {
+    recordsDirectory: options.recordsDirectory, environment: options.environment ?? process.env,
+  });
   const { coverage, evidence } = composed;
   // Beancount comments preserve the observation carrier in the same delivered artifact;
   // they are evidence, not postings or an assertion that every resource was accounted for.
@@ -225,16 +242,18 @@ if (import.meta.main) {
       "range-start": { type: "string" },
       "range-end": { type: "string" },
       out: { type: "string" },
+      "records-dir": { type: "string" },
     },
   });
   if (!values.account) {
-    process.stderr.write("usage: hive-auto-ledger-cli --account <name> [--range-start YYYY-MM-DD] [--range-end YYYY-MM-DD] [--out <path>]\n");
-    process.stderr.write("  --out defaults to this section's data/records/<rangeEnd>-<account>-hive-account-ledger.beancount\n");
+    process.stderr.write("usage: hive-auto-ledger-cli --account <name> [--range-start YYYY-MM-DD] [--range-end YYYY-MM-DD] [--out <path> | --records-dir <directory>]\n");
+    process.stderr.write("  Without --out, set --records-dir, HIVE_AUTO_LEDGER_RECORDS_DIR, or METROPLAT_WEB_DATA_DIR.\n");
     process.exit(2);
   }
   try {
     const result = await runHiveAutoLedger({
-      account: values.account, rangeStart: values["range-start"], rangeEnd: values["range-end"], out: values.out,
+      account: values.account, rangeStart: values["range-start"], rangeEnd: values["range-end"],
+      out: values.out, recordsDirectory: values["records-dir"],
     });
     process.stdout.write(`${JSON.stringify({
       account: result.chainAccount.name,

@@ -1,6 +1,6 @@
 {
   "name": "@red-cup-engineering/hive-auto-ledger-cli",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Composed CLI face for the Hive wallet-analyzer lineage: reads one account's mainchain and Hive-Engine history, derives its Beancount ledger, checks it with farolfi, and runs farolfi's balance and valuation reports over it.",
   "repository": {
     "type": "git",
@@ -31,7 +31,8 @@
   "scripts": {
     "check": "node --check hive-auto-ledger-cli.mjs",
     "test": "node --test test/*.test.mjs",
-    "pack:dry-run": "npm pack --dry-run --ignore-scripts"
+    "pack:dry-run": "npm pack --dry-run --ignore-scripts",
+    "test:portable": "node --test test/package-import-smoke.test.mjs"
   },
   "engines": {
     "node": ">=24.2.0"
