@@ -33,6 +33,8 @@ test("packed Hive ledger package imports without a repo root and writes only to 
       import { join, resolve } from "node:path";
       const ledger = await import(process.env.LEDGER_PACKED_FILE_URL);
       assert.equal(ledger.custodyAccountsFor("emsenn0").hive, "Assets:Digital-Assets:Hive:Custody:Emsenn0");
+      for (const name of ["checkLedger", "runFarolfiReport", "deriveLedgerForAccount", "runHiveAutoLedger", "defaultLedgerRecordsPath"])
+        assert.equal(typeof ledger[name], "function", "published API missing: " + name);
       assert.throws(() => ledger.defaultLedgerRecordsPath("emsenn0", "2026-10-22", { environment: {} }), /specify --out/);
       assert.throws(() => ledger.defaultLedgerRecordsPath("../escape", "2026-10-22", { recordsDirectory: process.env.LEDGER_TMP }), /invalid Hive account/);
       assert.throws(() => ledger.defaultLedgerRecordsPath("emsenn0", "2026-02-30", { recordsDirectory: process.env.LEDGER_TMP }), /valid YYYY-MM-DD/);

@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: '24'
       - name: Check package entrypoint syntax
-        run: npm run check
+        run: |
+          npm run check
+          node --check test/hive-auto-ledger-cli.test.mjs
+          node --check test/ledger-evidence-export.test.mjs
       - name: Test actual npm archive import outside the checkout
         run: npm run test:portable

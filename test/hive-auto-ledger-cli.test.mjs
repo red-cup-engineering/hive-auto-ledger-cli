@@ -7,35 +7,42 @@ import {
   custodyAccountsFor,
   defaultLedgerRecordsPath,
   deriveLedgerForAccount,
-  runBeanCheck,
+  checkLedger,
   runFarolfiReport,
   runHiveAutoLedger,
 } from "../hive-auto-ledger-cli.mjs";
 
-test("defaultLedgerRecordsPath: lands under this section's own data/records/ with a dated name, never an invented data/logs/ledgers/ directory", () => {
-  const path = defaultLedgerRecordsPath("emsenn0", "2026-09-05");
-  assert.ok(path.endsWith("/data/records/hive-account-ledger-records/2026-09-05-emsenn0-hive-account-ledger.beancount"), path);
-  assert.ok(path.includes("/hive-services-section/"), path);
-  assert.ok(!path.includes("/data/logs/"), path);
+test("defaultLedgerRecordsPath: keeps records out of the package and guards unsafe inputs", () => {
+  const recordsDirectory = join(tmpdir(), "portable-hive-records");
+  const path = defaultLedgerRecordsPath("emsenn0", "2026-09-05", { recordsDirectory, environment: {} });
+  assert.equal(path, join(recordsDirectory, "2026-09-05-emsenn0-hive-account-ledger.beancount"));
+  assert.throws(() => defaultLedgerRecordsPath("emsenn0", "2026-09-05", { environment: {} }), /specify --out/);
+  assert.throws(() => defaultLedgerRecordsPath("../outside", "2026-09-05", { recordsDirectory }), /invalid Hive account/);
+  assert.throws(() => defaultLedgerRecordsPath("emsenn0", "2026-02-30", { recordsDirectory }), /valid YYYY-MM-DD/);
+  assert.equal(defaultLedgerRecordsPath("emsenn0", "2026-09-05", {
+    environment: { METROPLAT_WEB_DATA_DIR: recordsDirectory },
+  }), join(recordsDirectory, "records", "hive-account-ledger-records", "2026-09-05-emsenn0-hive-account-ledger.beancount"));
 });
 
-test("runHiveAutoLedger: when out is omitted, writes to defaultLedgerRecordsPath rather than an invented location", async () => {
+test("runHiveAutoLedger: omitted out selects only the configured records directory", async () => {
   const chainAccount = { name: "emsenn0", created: "2026-06-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
+  const recordsDirectory = join(tmpdir(), "hive-records-test");
   let writtenPath = null;
   const result = await runHiveAutoLedger(
-    { account: "emsenn0", rangeStart: "2026-06-01", rangeEnd: "2026-09-05" },
+    { account: "emsenn0", rangeStart: "2026-06-01", rangeEnd: "2026-09-05", recordsDirectory, environment: {} },
     {
       clientFactory: fakeClientFactory(chainAccount),
       readHiveHistoryImpl: async () => ({ operations: [] }),
       readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
       fetchHiveEngineBalancesImpl: async () => [],
-      writeFileTextImpl: async (path, text) => { writtenPath = path; return { path, bytes: Buffer.byteLength(text) }; },
-      runBeanCheckImpl: async () => ({ command: "stub", exitCode: 0, stdout: "", stderr: "" }),
-      runFarolfiReportImpl: async (command) => ({ command, exitCode: 0, text: "", stderr: "" }),
+      writeFileTextImpl: async (path) => { writtenPath = path; },
+      checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
+      runFarolfiReportImpl: async (command) => ({ command, exitCode: 0, text: "" }),
     },
   );
-  assert.equal(result.out, defaultLedgerRecordsPath("emsenn0", "2026-09-05"));
+  assert.equal(result.out, defaultLedgerRecordsPath("emsenn0", "2026-09-05", { recordsDirectory, environment: {} }));
   assert.equal(writtenPath, result.out);
+  assert.equal(result.check.ok, true);
 });
 
 test("custodyAccountsFor: capitalizes the account name into the house naming pattern", () => {
@@ -113,24 +120,25 @@ test("deriveLedgerForAccount: throws when the chain account does not exist", asy
   ), /account not found/);
 });
 
-test("runBeanCheck: reports a failing exit code rather than throwing", async () => {
-  const execImpl = async () => { const e = new Error("bean-check failed"); e.code = 1; e.stdout = ""; e.stderr = "ERROR: unbalanced"; throw e; };
-  const result = await runBeanCheck("/nonexistent/path.beancount", { execImpl });
-  assert.equal(result.exitCode, 1);
-  assert.ok(result.stderr.includes("unbalanced"));
+test("checkLedger: evaluates a Beancount file with the current farolfi check API", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hive-auto-ledger-check-test-"));
+  const out = join(dir, "trivial.beancount");
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(out, '2026-01-01 open Assets:Cash\n2026-01-01 open Equity:Opening-Balances\n2026-01-01 * "seed"\n  Assets:Cash  1 USD\n  Equity:Opening-Balances  -1 USD\n');
+    const result = checkLedger(out);
+    assert.equal(result.ok, true);
+    assert.equal(result.report.ok, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
-test("runBeanCheck: reports exit 0 on success", async () => {
-  const execImpl = async () => ({ stdout: "", stderr: "" });
-  const result = await runBeanCheck("/some/path.beancount", { execImpl });
-  assert.equal(result.exitCode, 0);
-});
-
-test("runFarolfiReport: reports a failing exit code rather than throwing", async () => {
-  const execImpl = async () => { const e = new Error("farolfi failed"); e.code = 2; e.stdout = ""; e.stderr = "farolfi: unknown command"; throw e; };
-  const result = await runFarolfiReport("bal", "/nonexistent/path.beancount", { execImpl });
+test("runFarolfiReport: unsupported command returns a parser error", () => {
+  const result = runFarolfiReport("unknown-ledger-command", "/nonexistent/path.beancount");
   assert.equal(result.exitCode, 2);
-  assert.ok(result.stderr.includes("unknown command"));
+  assert.equal(typeof result.text, "string");
+  assert.ok(result.text.length > 0);
 });
 
 test("runFarolfiReport: resolves the real published farolfi bin and reports exit 0 over a trivial ledger", async () => {
@@ -159,10 +167,10 @@ test("runHiveAutoLedger: writes the ledger, runs bean-check, and runs farolfi's 
         readHiveHistoryImpl: async () => ({ operations: [] }),
         readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
         fetchHiveEngineBalancesImpl: async () => [],
-        runBeanCheckImpl: async () => ({ command: "stub", exitCode: 0, stdout: "", stderr: "" }),
+        checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
       },
     );
-    assert.equal(result.beanCheck.exitCode, 0);
+    assert.equal(result.check.ok, true);
     assert.ok(result.balanceReport.text.length > 0);
     assert.equal(result.balanceReport.exitCode, 0);
     assert.equal(result.valuationReport.exitCode, 0);
