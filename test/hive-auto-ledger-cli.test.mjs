@@ -55,6 +55,26 @@ function fakeClientFactory(chainAccount) {
   return () => ({ async getAccounts() { return [chainAccount]; } });
 }
 
+test("deriveLedgerForAccount: refuses a provider response for a different Hive account before downstream reads", async () => {
+  const requested = "emsenn0";
+  const wrongAccount = {
+    name: "unrelatedwallet", created: "2026-01-01T00:00:00",
+    balance: "9.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+  };
+  let downstreamReads = 0;
+  const forbiddenRead = async () => { downstreamReads++; throw new Error("should not query unrelated source"); };
+  await assert.rejects(
+    deriveLedgerForAccount({ account: requested, rangeEnd: "2026-10-22" }, {
+      clientFactory: () => ({ getAccounts: async () => [wrongAccount] }),
+      readHiveHistoryImpl: forbiddenRead,
+      readHiveEngineHistoryImpl: forbiddenRead,
+      fetchHiveEngineBalancesImpl: forbiddenRead,
+    }),
+    /account identity mismatch/,
+  );
+  assert.equal(downstreamReads, 0);
+});
+
 test("deriveLedgerForAccount: back-derives an opening balance for a bounded window from the chain's current balance", async () => {
   const chainAccount = { name: "emsenn0", created: "2021-02-11T21:25:36", balance: "10.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
   const composed = await deriveLedgerForAccount(
