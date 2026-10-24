@@ -137,6 +137,12 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   const waggle = clientFactory([hiveNodes[0]]);
   const [chainAccount] = await waggle.getAccounts([account]);
   if (!chainAccount) throw new Error(`hive-auto-ledger-cli: account not found on chain: ${account}`);
+  // Do not mix balance evidence for an unrelated wallet with history fetched
+  // for the requested identity. Treat mismatched provider responses as refused
+  // source admission before the parallel history/Engine reads start.
+  if (chainAccount.name !== account) {
+    throw new Error("hive-auto-ledger-cli: account identity mismatch from chain provider");
+  }
 
   const rangeStart = rangeStartInput ?? chainAccount.created.slice(0, 10);
   const rangeEnd = selectedRangeEnd;
