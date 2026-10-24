@@ -6,7 +6,7 @@
  * and valuation reports over it.
  */
 import { parseArgs } from "node:util";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { writeFileText } from "@red-cup-engineering/computer-file-engineering-services-section/write-file";
 import { HiveClient } from "@red-cup-engineering/hive-blockchain-client-service";
 import { readHiveAccountHistory } from "@red-cup-engineering/read-hive-account-history-service";
