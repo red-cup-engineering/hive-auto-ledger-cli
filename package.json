@@ -19,14 +19,14 @@
     "package.json"
   ],
   "dependencies": {
-    "@red-cup-engineering/metrologic": "workspace:*",
-    "@red-cup-engineering/derive-hive-account-ledger-service": "workspace:*",
-    "@red-cup-engineering/farolfi": "workspace:*",
-    "@red-cup-engineering/computer-file-engineering-services-section": "workspace:*",
-    "@red-cup-engineering/hive-blockchain-client-service": "workspace:*",
-    "@red-cup-engineering/read-hive-account-history-service": "workspace:*",
-    "@red-cup-engineering/read-hive-engine-account-history-service": "workspace:*",
-    "@red-cup-engineering/exact-number-data-service": "workspace:*"
+    "@red-cup-engineering/metrologic": "0.4.0",
+    "@red-cup-engineering/derive-hive-account-ledger-service": "0.1.6",
+    "@red-cup-engineering/farolfi": "0.6.4",
+    "@red-cup-engineering/computer-file-engineering-services-section": "0.8.0",
+    "@red-cup-engineering/hive-blockchain-client-service": "0.1.5",
+    "@red-cup-engineering/read-hive-account-history-service": "0.1.1",
+    "@red-cup-engineering/read-hive-engine-account-history-service": "0.1.5",
+    "@red-cup-engineering/exact-number-data-service": "0.1.5"
   },
   "scripts": {
     "check": "node --check hive-auto-ledger-cli.mjs",
