@@ -157,6 +157,8 @@ export async function deriveLedgerForAccount(options, deps = {}) {
     readHiveEngineHistoryImpl({ account, nodes: heNodes, fillNodes: heFillNodes, from, to }),
     fetchHiveEngineBalancesImpl([account]),
   ]);
+  if (!Array.isArray(hiveHistory?.operations)) throw new TypeError("hive-auto-ledger-cli: invalid Hive history response");
+  if (!Array.isArray(heHistory?.entries) || !Array.isArray(heHistory?.fills)) throw new TypeError("hive-auto-ledger-cli: invalid Hive-Engine history response");
   // Liquid balance only: the custody account this service tracks holds the *liquid* position;
   // staked, pending-unstake, and delegated-out quantities move to their own sub-accounts
   // (derive-hive-account-ledger-service's :Staked/:Pending-Unstake/:Delegated-Out), so comparing
