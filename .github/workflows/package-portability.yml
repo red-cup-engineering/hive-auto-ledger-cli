@@ -27,3 +27,41 @@ jobs:
           node --check test/ledger-evidence-export.test.mjs
       - name: Test packed archive import with isolated mock dependencies (not installed closure)
         run: npm run test:portable
+
+  installed-dependency-consumer:
+    # Separate from the mock-backed package boundary check: this must resolve
+    # actual registry dependencies and run the existing native tests.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+      - name: Install the actual packed package into a clean independent consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(npm pack --ignore-scripts --silent)"
+          receiver="$RUNNER_TEMP/hive-ledger-native-consumer"
+          mkdir -p "$receiver"
+          cd "$receiver"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund \
+            --registry=https://registry.561.group/ "$GITHUB_WORKSPACE/$archive"
+          node --input-type=module -e "
+            const ledger = await import('@red-cup-engineering/hive-auto-ledger-cli');
+            if (typeof ledger.deriveLedgerForAccount !== 'function' ||
+                typeof ledger.runHiveAutoLedger !== 'function') {
+              throw new Error('installed consumer exports are missing');
+            }
+          "
+      - name: Execute original native unit, accounting, and security regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund \
+            --registry=https://registry.561.group/
+          npm test
