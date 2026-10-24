@@ -69,7 +69,19 @@ test("packed Hive ledger package imports without a repo root and writes only to 
         ledger.runHiveAutoLedger({account:"emsenn0",rangeEnd:"2026-10-22",out:"   ",environment:{}}, refuseDeps),
         /--out must be a nonempty/,
       );
-      assert.equal(invoked, 0, "source provider must not run before valid write custody");
+      // A selected output is not authority to query providers using invalid
+      // account or date inputs. Both direct derivation consumers and full
+      // writers must refuse before making even one RPC constructor call.
+      const invalidInputs = [
+        [{account:"../escape",rangeEnd:"2026-10-22"}, /invalid Hive account/],
+        [{account:"emsenn0",rangeStart:"2026-02-30",rangeEnd:"2026-10-22"}, /valid YYYY-MM-DD/],
+        [{account:"emsenn0",rangeStart:"2026-10-23",rangeEnd:"2026-10-22"}, /range start.*after.*end/],
+      ];
+      for (const [options, message] of invalidInputs) {
+        await assert.rejects(ledger.deriveLedgerForAccount(options, refuseDeps), message);
+        await assert.rejects(ledger.runHiveAutoLedger({...options,out:join(process.env.LEDGER_TMP,"named.beancount")}, refuseDeps), message);
+      }
+      assert.equal(invoked, 0, "source provider must not run before valid account, range and write custody");
       let written;
       const result = await ledger.runHiveAutoLedger(
         { account:"emsenn0",rangeEnd:"2026-10-22",recordsDirectory:join(process.env.LEDGER_TMP,"written"),environment:{} },
