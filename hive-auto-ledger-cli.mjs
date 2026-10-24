@@ -28,16 +28,6 @@ function capitalized(name) {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-/**
- * Resolve the dated-record output directory ONLY when an output is requested.
- * The installed package must never infer a writable enterprise records directory from
- * its location in a pnpm/Guix/npm store. An explicit directory wins; otherwise use
- * HIVE_AUTO_LEDGER_RECORDS_DIR or the already-configured MetroPlat web-data records area.
- * @param {string} account - Hive account name, not a filesystem path
- * @param {string} dateStamp - YYYY-MM-DD
- * @param {{ recordsDirectory?: string, environment?: Record<string,string|undefined> }} [options]
- * @returns {string} absolute path
- */
 function requireHiveAccount(account) {
   if (typeof account !== "string" || !/^[a-z][a-z0-9.-]{2,15}$/.test(account)) {
     throw new TypeError("hive-auto-ledger-cli: invalid Hive account name for records path");
@@ -52,6 +42,16 @@ function requireLedgerDate(dateStamp) {
   }
 }
 
+/**
+ * Resolve the dated-record output directory ONLY when an output is requested.
+ * The installed package must never infer a writable enterprise records directory from
+ * its location in a pnpm/Guix/npm store. An explicit directory wins; otherwise use
+ * HIVE_AUTO_LEDGER_RECORDS_DIR or the already-configured MetroPlat web-data records area.
+ * @param {string} account - Hive account name, not a filesystem path
+ * @param {string} dateStamp - YYYY-MM-DD
+ * @param {{ recordsDirectory?: string, environment?: Record<string,string|undefined> }} [options]
+ * @returns {string} absolute path
+ */
 export function defaultLedgerRecordsPath(account, dateStamp, {
   recordsDirectory,
   environment = process.env,
