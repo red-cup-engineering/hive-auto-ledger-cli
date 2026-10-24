@@ -168,6 +168,30 @@ test("packed Hive ledger package imports without a repo root and writes only to 
       );
       assert.equal(result.out, join(resolve(process.env.LEDGER_TMP), "written", "2026-10-22-emsenn0-hive-account-ledger.beancount"));
       assert.equal(written, result.out);
+      // The actual installed-package export, not only the checkout source,
+      // must refuse a superficially clean ledger whose financial reports fail.
+      for (const failing of ["bal", "valuation"]) {
+        const invokedReports = [];
+        await assert.rejects(
+          ledger.runHiveAutoLedger(
+            { account: "emsenn0", rangeEnd: "2026-10-22", out: join(process.env.LEDGER_TMP, "report-refusal.beancount") },
+            {
+              clientFactory: () => ({ getAccounts: async () => [fake] }),
+              readHiveHistoryImpl: async () => ({ operations: [] }),
+              readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+              fetchHiveEngineBalancesImpl: async () => [],
+              writeFileTextImpl: async () => {},
+              checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
+              runFarolfiReportImpl: async (command) => {
+                invokedReports.push(command);
+                return { command, exitCode: command === failing ? 5 : 0, text: "" };
+              },
+            },
+          ),
+          new RegExp("farolfi " + failing + " report failed.*exit code 5"),
+        );
+        assert.deepEqual(invokedReports, failing === "bal" ? ["bal"] : ["bal", "valuation"]);
+      }
       console.log("packed-import-ok");
     `;
     const printed = run(process.execPath, [
