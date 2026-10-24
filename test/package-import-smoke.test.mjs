@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, mkdir, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const run = (command, args, options) => {
@@ -24,14 +24,20 @@ test("packed Hive ledger package imports without a repo root and writes only to 
     assert.ok(!packed.files.some((file) => file.path.startsWith("test/")), "test stubs must never be published");
 
     run("tar", ["-xzf", join(temp, packed.filename), "-C", temp], { cwd: temp });
-    const modulePath = join(temp, "package", "hive-auto-ledger-cli.mjs");
     const manifest = JSON.parse(await readFile(join(temp, "package", "package.json"), "utf8"));
     assert.equal(manifest.exports, "./hive-auto-ledger-cli.mjs");
+    // Exercise Node\u0027s real bare-package resolver from an unrelated consumer\u0027s
+    // node_modules layout, not a privileged direct file:// import from the tarball.
+    // Workspace dependencies remain deliberately mocked by the isolated loader.
+    const consumer = join(temp, "consumer");
+    const packageScope = join(consumer, "node_modules", "@red-cup-engineering");
+    await mkdir(packageScope, { recursive: true });
+    await rename(join(temp, "package"), join(packageScope, "hive-auto-ledger-cli"));
 
     const probe = `
       import assert from "node:assert/strict";
       import { join, resolve } from "node:path";
-      const ledger = await import(process.env.LEDGER_PACKED_FILE_URL);
+      const ledger = await import("@red-cup-engineering/hive-auto-ledger-cli");
       assert.equal(ledger.custodyAccountsFor("emsenn0").hive, "Assets:Digital-Assets:Hive:Custody:Emsenn0");
       for (const name of ["checkLedger", "runFarolfiReport", "deriveLedgerForAccount", "runHiveAutoLedger", "defaultLedgerRecordsPath"])
         assert.equal(typeof ledger[name], "function", "published API missing: " + name);
@@ -127,8 +133,8 @@ test("packed Hive ledger package imports without a repo root and writes only to 
       "--experimental-loader", fileURLToPath(new URL("./mock-workspace-dependencies-loader.mjs", import.meta.url)),
       "--input-type=module", "--eval", probe,
     ], {
-      cwd: temp,
-      env: { ...process.env, LEDGER_PACKED_FILE_URL: pathToFileURL(modulePath).href, LEDGER_TMP: temp,
+      cwd: consumer,
+      env: { ...process.env, LEDGER_TMP: temp,
         METROPLAT_WEB_DATA_DIR: "", HIVE_AUTO_LEDGER_RECORDS_DIR: "" },
     });
     assert.match(printed, /packed-import-ok/);
