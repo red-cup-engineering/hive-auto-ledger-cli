@@ -50,3 +50,26 @@ const result = await runHiveAutoLedger({ account: "emsenn0", out: "/authorized/r
 ~~~
 
 `npm run test:portable` builds an npm archive and imports that **packed file** from a temporary directory without any source-tree manifest, using explicit stubbed dependency imports; it tests portability, destination selection and negative cases without network or real ledger writes. This is a distribution-boundary smoke test, **not** a substitute for the original workspace's full accounting/reconciliation tests or the deployed Guix job's readback. After review the owning npm-workspace publication process must release this package, then the Group Operations installation must actually select that release and re-run chain reconciliation before closing the production incident.
+
+### Exact-source release-candidate qualification
+
+The public `package-portability` workflow distinguishes a mock-backed source smoke
+test from the `installed-dependency-consumer` job. The latter packs the real
+package twice and byte-compares both archives, installs the candidate in a
+fresh Node 24 consumer using the house registry and the **exact direct published
+dependency versions** in `package.json`, imports the installed package by name,
+and runs all original native accounting, negative and security tests against
+that same installed dependency closure without a second expensive installation.
+
+Only after those steps pass does the workflow retain the **same tested archive**,
+SHA-256 checksum, exact tested Git commit/tree, workflow-run identity, and the
+consumer's real `package-lock.json`, which witnesses its *observed transitive*
+dependency versions and integrity selections. The independent
+`receive-qualified-package` job checks both retained hashes and source/package
+identity. Because transitive dependency versions are selected at install time,
+the retained lockfile is evidence of **this execution**, not a claim that a
+different later install has the same dependency graph. The retained candidate
+is **not** a registry publication, immutable Guix installation, reconciled
+accounting record, or accepted consumer outcome. Original release and host
+owners still need independent review, authorized publication, exact installation
+and a real Group Operations reconciliation receipt.

@@ -93,7 +93,10 @@ jobs:
           archive=("$RUNNER_TEMP/hive-first"/*.tgz)
           [[ ${#archive[@]} -eq 1 ]]
           cp -- "${archive[0]}" "$qualified/hive-ledger.tgz"
-          (cd "$qualified" && sha256sum hive-ledger.tgz > SHA256SUMS)
+          # Keep the actual transitive registry selections used by this installation,
+          # without falsely claiming that package.json pins the whole transitive graph.
+          cp -- "$RUNNER_TEMP/hive-ledger-native-consumer/package-lock.json" "$qualified/consumer-package-lock.json"
+          (cd "$qualified" && sha256sum hive-ledger.tgz consumer-package-lock.json > SHA256SUMS)
           node --input-type=module - "$qualified" <<'NODE'
           import { execFileSync } from 'node:child_process';
           import { readFileSync, writeFileSync } from 'node:fs';
@@ -101,9 +104,16 @@ jobs:
           const qualified = process.argv[2];
           const source = process.env.GITHUB_WORKSPACE;
           const git = (...args) => execFileSync('git', ['-C', source, ...args], { encoding: 'utf8' }).trim();
-          const line = readFileSync(join(qualified, 'SHA256SUMS'), 'utf8').trim();
+          const sums = readFileSync(join(qualified, 'SHA256SUMS'), 'utf8').trim().split('\n');
+          if (sums.length !== 2) throw new Error('expected artifact and dependency-lock digests');
+          const [line, lockLine] = sums;
           if (!/^[a-f0-9]{64}  hive-ledger[.]tgz$/u.test(line)) throw new Error('invalid artifact digest');
+          if (!/^[a-f0-9]{64}  consumer-package-lock[.]json$/u.test(lockLine)) throw new Error('invalid consumer lock digest');
           const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));
+          const lock = JSON.parse(readFileSync(join(qualified, 'consumer-package-lock.json'), 'utf8'));
+          if (lock.packages?.['node_modules/@red-cup-engineering/hive-auto-ledger-cli']?.version !== manifest.version) {
+            throw new Error('installed package version disagrees with tested source');
+          }
           writeFileSync(join(qualified, 'qualification.json'), JSON.stringify({
             kind: 'hive-ledger-installed-consumer-candidate',
             version: 1,
@@ -115,6 +125,8 @@ jobs:
             packageVersion: manifest.version,
             artifact: 'hive-ledger.tgz',
             artifactSha256: line.slice(0, 64),
+            consumerLockSha256: lockLine.slice(0, 64),
+            installedPackageCount: Object.keys(lock.packages).length - 1,
             qualification: 'Node 24; identical twin packs; actual house registry dependency installation; independent package import; native source unit, negative and accounting tests'
           }, null, 2) + '\n');
           NODE
@@ -152,8 +164,13 @@ jobs:
           import { readFileSync } from 'node:fs';
           const git = (...args) => execFileSync('git', ['-C', process.env.GITHUB_WORKSPACE, ...args], { encoding: 'utf8' }).trim();
           const receipt = JSON.parse(readFileSync('qualification.json', 'utf8'));
-          const line = readFileSync('SHA256SUMS', 'utf8').trim();
+          const sums = readFileSync('SHA256SUMS', 'utf8').trim().split('\n');
+          assert.equal(sums.length, 2);
+          const [line, lockLine] = sums;
+          assert.match(lockLine, /^[a-f0-9]{64}  consumer-package-lock[.]json$/u);
+          const lock = JSON.parse(readFileSync('consumer-package-lock.json', 'utf8'));
           const pkg = JSON.parse(readFileSync(process.env.GITHUB_WORKSPACE + '/package.json', 'utf8'));
+          assert.equal(lock.packages?.['node_modules/@red-cup-engineering/hive-auto-ledger-cli']?.version, pkg.version);
           assert.equal(receipt.kind, 'hive-ledger-installed-consumer-candidate');
           assert.equal(receipt.version, 1);
           assert.equal(receipt.sourceRepository, process.env.GITHUB_REPOSITORY);
@@ -164,5 +181,7 @@ jobs:
           assert.equal(receipt.packageVersion, pkg.version);
           assert.equal(receipt.artifact, 'hive-ledger.tgz');
           assert.equal(receipt.artifactSha256, line.slice(0, 64));
+          assert.equal(receipt.consumerLockSha256, lockLine.slice(0, 64));
+          assert.equal(receipt.installedPackageCount, Object.keys(lock.packages).length - 1);
           assert.match(receipt.artifactSha256, /^[a-f0-9]{64}$/u);
           NODE
