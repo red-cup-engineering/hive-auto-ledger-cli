@@ -147,6 +147,43 @@ test("deriveLedgerForAccount: refuses cross-wallet, unattributed and malformed H
   );
 });
 
+test("deriveLedgerForAccount: rejects duplicate and malformed Hive-Engine balance symbols before publishing accounting evidence", async () => {
+  const account = "emsenn0";
+  const chainAccount = {
+    name: account, created: "2026-01-01T00:00:00",
+    balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+  };
+  const basic = {
+    clientFactory: fakeClientFactory(chainAccount),
+    readHiveHistoryImpl: async () => ({ operations: [] }),
+    readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+  };
+  const good = { account, symbol: "MUSIC", balance: "1.000" };
+  for (const rows of [
+    [good, { ...good, balance: "999.000" }],
+    [good, { ...good }],
+    [{ account, balance: "12.000" }],
+    [{ account, symbol: null, balance: "12.000" }],
+  ]) {
+    let writes = 0;
+    await assert.rejects(
+      runHiveAutoLedger({ account, rangeEnd: "2026-10-22", out: join(tmpdir(), "must-not-publish-ambiguous-hive-engine-balances.beancount") }, {
+        ...basic,
+        fetchHiveEngineBalancesImpl: async () => rows,
+        writeFileTextImpl: async () => { writes++; },
+      }),
+      /duplicate Hive-Engine balance|invalid Hive-Engine balance symbol/,
+    );
+    assert.equal(writes, 0, "a disputed token source must never reach candidate or final publication");
+  }
+  const distinct = await deriveLedgerForAccount({ account, rangeEnd: "2026-10-22" }, {
+    ...basic,
+    fetchHiveEngineBalancesImpl: async () => [good, { ...good, symbol: "STAR", balance: "2.000" }],
+  });
+  assert.equal(distinct.chainClosingBalances.hiveEngine.MUSIC, "1");
+  assert.equal(distinct.chainClosingBalances.hiveEngine.STAR, "2");
+});
+
 test("deriveLedgerForAccount: back-derives an opening balance for a bounded window from the chain's current balance", async () => {
   const chainAccount = { name: "emsenn0", created: "2021-02-11T21:25:36", balance: "10.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
   const composed = await deriveLedgerForAccount(
