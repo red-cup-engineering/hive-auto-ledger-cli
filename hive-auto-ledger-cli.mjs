@@ -161,8 +161,17 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   // staked, pending-unstake, and delegated-out quantities move to their own sub-accounts
   // (derive-hive-account-ledger-service's :Staked/:Pending-Unstake/:Delegated-Out), so comparing
   // this scope against the chain's combined balance+stake figure would be a scope mismatch.
+  // Hive Engine's balances table carries an account field on every row.
+  // A partial or misrouted provider response must not contaminate this wallet's
+  // closing balances or the accounting evidence that will be written to disk.
+  if (!Array.isArray(heBalanceRows)) {
+    throw new TypeError("hive-auto-ledger-cli: invalid Hive-Engine balances response");
+  }
   const hiveEngineChainBalances = {};
   for (const row of heBalanceRows) {
+    if (!row || row.account !== account) {
+      throw new Error("hive-auto-ledger-cli: Hive-Engine account identity mismatch from balances provider");
+    }
     hiveEngineChainBalances[row.symbol] = plainDecimal(row.balance);
   }
 
