@@ -38,18 +38,26 @@ function capitalized(name) {
  * @param {{ recordsDirectory?: string, environment?: Record<string,string|undefined> }} [options]
  * @returns {string} absolute path
  */
-export function defaultLedgerRecordsPath(account, dateStamp, {
-  recordsDirectory,
-  environment = process.env,
-} = {}) {
+function requireHiveAccount(account) {
   if (typeof account !== "string" || !/^[a-z][a-z0-9.-]{2,15}$/.test(account)) {
     throw new TypeError("hive-auto-ledger-cli: invalid Hive account name for records path");
   }
+}
+
+function requireLedgerDate(dateStamp) {
   if (typeof dateStamp !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStamp) ||
       !Number.isFinite(Date.parse(`${dateStamp}T00:00:00.000Z`)) ||
       new Date(`${dateStamp}T00:00:00.000Z`).toISOString().slice(0, 10) !== dateStamp) {
     throw new TypeError("hive-auto-ledger-cli: records date must be a valid YYYY-MM-DD");
   }
+}
+
+export function defaultLedgerRecordsPath(account, dateStamp, {
+  recordsDirectory,
+  environment = process.env,
+} = {}) {
+  requireHiveAccount(account);
+  requireLedgerDate(dateStamp);
   const dir = recordsDirectory ?? environment?.HIVE_AUTO_LEDGER_RECORDS_DIR ??
     (environment?.METROPLAT_WEB_DATA_DIR ?
       join(environment.METROPLAT_WEB_DATA_DIR, "records", "hive-account-ledger-records") : undefined);
@@ -108,6 +116,17 @@ export async function deriveLedgerForAccount(options, deps = {}) {
     account, rangeStart: rangeStartInput, rangeEnd: rangeEndInput,
     hiveNodes = DEFAULT_HIVE_NODES, heNodes = DEFAULT_HE_NODES, heFillNodes = DEFAULT_HE_FILL_NODES,
   } = options;
+  // Invalid account/range inputs must not start a network or history query,
+  // including when this API is imported without any output destination.
+  requireHiveAccount(account);
+  const selectedRangeEnd = rangeEndInput ?? new Date().toISOString().slice(0, 10);
+  requireLedgerDate(selectedRangeEnd);
+  if (rangeStartInput !== undefined && rangeStartInput !== null) {
+    requireLedgerDate(rangeStartInput);
+    if (rangeStartInput > selectedRangeEnd) {
+      throw new RangeError("hive-auto-ledger-cli: range start is after range end");
+    }
+  }
   const {
     clientFactory = (nodes) => new HiveClient({ nodes }),
     readHiveHistoryImpl = readHiveAccountHistory,
@@ -120,7 +139,7 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   if (!chainAccount) throw new Error(`hive-auto-ledger-cli: account not found on chain: ${account}`);
 
   const rangeStart = rangeStartInput ?? chainAccount.created.slice(0, 10);
-  const rangeEnd = rangeEndInput ?? new Date().toISOString().slice(0, 10);
+  const rangeEnd = selectedRangeEnd;
   const from = rangeStartInput ? { time: `${rangeStart}T00:00:00.000Z` } : undefined;
   const to = { time: `${rangeEnd}T00:00:00.000Z` };
 
