@@ -6,6 +6,7 @@
  * and valuation reports over it.
  */
 import { parseArgs } from "node:util";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
@@ -289,14 +290,15 @@ export async function runHiveAutoLedger(options, deps = {}) {
     recordsDirectory: options.recordsDirectory, environment: options.environment ?? process.env,
   });
   const { coverage, evidence } = composed;
-  // A parseable, balanced journal cannot repair missing pages, disputed
-  // provider observations, derivation refusals or failed chain assertions.
-  // The source-owned evidence carrier records each unresolved observation,
-  // but it must not replace the last accepted financial book. This refusal
-  // occurs before any candidate or final output path is written.
-  if (coverage.unresolved.length > 0) {
+  // Keep the original incomplete-evidence export contract: a NEW file can
+  // carry admitted coverage gaps, with the CLI reporting nonzero acceptance.
+  // However, an unresolved reading is never authority to REPLACE an earlier
+  // independently received ledger. Fail early when one already exists, and
+  // retain exclusive-creation semantics for the final write to close races.
+  const hasUnresolvedSourceEvidence = coverage.unresolved.length > 0;
+  if (hasUnresolvedSourceEvidence && existsSync(out)) {
     const sources = [...new Set(coverage.unresolved.map((item) => item.source))].sort().join(", ");
-    throw new Error(`hive-auto-ledger-cli: unresolved source evidence (${coverage.unresolved.length}; ${sources}); refusing to publish ledger`);
+    throw new Error(`hive-auto-ledger-cli: unresolved source evidence (${coverage.unresolved.length}; ${sources}); refusing to replace existing ledger`);
   }
   // Beancount comments preserve the observation carrier in the same delivered artifact;
   // they are evidence, not postings or an assertion that every resource was accounted for.
@@ -330,7 +332,17 @@ export async function runHiveAutoLedger(options, deps = {}) {
     // Use the original source-owned atomic writer for the final replacement:
     // it preserves existing permissions and filesystem durability semantics.
     // Do not rename here and silently bypass that source-owned contract.
-    await write(out, ledgerText);
+    try {
+      // If the source is incomplete, only create a NEW observation carrier.
+      // Another writer may have published accepted evidence after our early
+      // existence check; the original writer's exclusive flag protects it.
+      await write(out, ledgerText, hasUnresolvedSourceEvidence ? { flag: "wx" } : undefined);
+    } catch (error) {
+      if (hasUnresolvedSourceEvidence && error?.code === "EEXIST") {
+        throw new Error("hive-auto-ledger-cli: unresolved source evidence; refusing to replace existing ledger", { cause: error });
+      }
+      throw error;
+    }
     return { ...composed, out, coverage, evidence, ledgerText, check, balanceReport: balance, valuationReport: valuation };
   } finally {
     // An unsuccessful exclusive create cannot establish ownership; never
