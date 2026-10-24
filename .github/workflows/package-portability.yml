@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# Source iteration can trigger another ~1200-package installed closure before
+# the previous candidate has finished. Keep only the newest unqualified head
+# in flight for each PR or branch; previously retained receipts are untouched.
+concurrency:
+  group: hive-ledger-qualify-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   package-smoke:
     runs-on: ubuntu-latest
