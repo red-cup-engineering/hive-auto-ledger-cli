@@ -29,8 +29,8 @@ jobs:
         run: npm run test:portable
 
   installed-dependency-consumer:
-    # Separate from the mock-backed package boundary check: this must resolve
-    # actual registry dependencies and run the existing native tests.
+    # This is intentionally separate from the mock-backed source smoke test.
+    # Source, pack, real registry closure and real native tests must all agree.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -40,33 +40,32 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
-      - name: Observe real house-registry dependency releases before selection
+      - name: Twin-pack reproducible candidate and install its real house-registry closure
         shell: bash
         run: |
           set -euo pipefail
-          for package in \
-            @red-cup-engineering/metrologic \
-            @red-cup-engineering/derive-hive-account-ledger-service \
-            @red-cup-engineering/farolfi \
-            @red-cup-engineering/computer-file-engineering-services-section \
-            @red-cup-engineering/hive-blockchain-client-service \
-            @red-cup-engineering/read-hive-account-history-service \
-            @red-cup-engineering/read-hive-engine-account-history-service \
-            @red-cup-engineering/exact-number-data-service; do
-            printf 'registry %s -> ' "$package"
-            npm view "$package" version --registry=https://registry.561.group/
+          mkdir -p "$RUNNER_TEMP/hive-first" "$RUNNER_TEMP/hive-second"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/hive-first" --silent
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/hive-second" --silent
+          shopt -s nullglob
+          first=("$RUNNER_TEMP/hive-first"/*.tgz)
+          second=("$RUNNER_TEMP/hive-second"/*.tgz)
+          [[ ${#first[@]} -eq 1 && ${#second[@]} -eq 1 ]]
+          cmp -- "${first[0]}" "${second[0]}"
+          tar -tzf "${first[0]}" > "$RUNNER_TEMP/hive-package-files"
+          for path in package.json hive-auto-ledger-cli.mjs README.md; do
+            grep -Fqx -- "package/$path" "$RUNNER_TEMP/hive-package-files"
           done
-      - name: Install the actual packed package into a clean independent consumer
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="$(npm pack --ignore-scripts --silent)"
+          if grep -Eq '^package/(node_modules/|data/|\.env|\.git/)' "$RUNNER_TEMP/hive-package-files"; then
+            echo "Distributable contains unwanted source or runtime custody" >&2
+            exit 1
+          fi
           receiver="$RUNNER_TEMP/hive-ledger-native-consumer"
           mkdir -p "$receiver"
           cd "$receiver"
           npm init -y >/dev/null
           npm install --ignore-scripts --no-audit --no-fund \
-            --registry=https://registry.561.group/ "$GITHUB_WORKSPACE/$archive"
+            --registry=https://registry.561.group/ "${first[0]}"
           node --input-type=module -e "
             const ledger = await import('@red-cup-engineering/hive-auto-ledger-cli');
             if (typeof ledger.deriveLedgerForAccount !== 'function' ||
@@ -74,10 +73,96 @@ jobs:
               throw new Error('installed consumer exports are missing');
             }
           "
-      - name: Execute original native unit, accounting, and security regressions
+      - name: Run original native tests against the SAME installed registry closure
         shell: bash
         run: |
           set -euo pipefail
-          npm install --ignore-scripts --no-audit --no-fund \
-            --registry=https://registry.561.group/
+          # Do not fetch/install 1200+ dependencies again for the source assay.
+          # ESM source tests resolve the exact registry closure already received
+          # by the independent installed consumer.
+          test ! -e node_modules
+          ln -s "$RUNNER_TEMP/hive-ledger-native-consumer/node_modules" node_modules
           npm test
+      - name: Retain exactly the consumer-tested deterministic archive and source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          qualified="$RUNNER_TEMP/hive-ledger-qualified"
+          mkdir -p "$qualified"
+          shopt -s nullglob
+          archive=("$RUNNER_TEMP/hive-first"/*.tgz)
+          [[ ${#archive[@]} -eq 1 ]]
+          cp -- "${archive[0]}" "$qualified/hive-ledger.tgz"
+          (cd "$qualified" && sha256sum hive-ledger.tgz > SHA256SUMS)
+          node --input-type=module - "$qualified" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const qualified = process.argv[2];
+          const source = process.env.GITHUB_WORKSPACE;
+          const git = (...args) => execFileSync('git', ['-C', source, ...args], { encoding: 'utf8' }).trim();
+          const line = readFileSync(join(qualified, 'SHA256SUMS'), 'utf8').trim();
+          if (!/^[a-f0-9]{64}  hive-ledger[.]tgz$/u.test(line)) throw new Error('invalid artifact digest');
+          const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));
+          writeFileSync(join(qualified, 'qualification.json'), JSON.stringify({
+            kind: 'hive-ledger-installed-consumer-candidate',
+            version: 1,
+            sourceRepository: process.env.GITHUB_REPOSITORY,
+            testedCommit: git('rev-parse', 'HEAD'),
+            testedTree: git('rev-parse', 'HEAD^{tree}'),
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            package: manifest.name,
+            packageVersion: manifest.version,
+            artifact: 'hive-ledger.tgz',
+            artifactSha256: line.slice(0, 64),
+            qualification: 'Node 24; identical twin packs; actual house registry dependency installation; independent package import; native source unit, negative and accounting tests'
+          }, null, 2) + '\n');
+          NODE
+      - name: Preserve qualified archive for independent publication receiving
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hive-ledger-qualified-${{ github.sha }}
+          path: ${{ runner.temp }}/hive-ledger-qualified/
+          if-no-files-found: error
+          retention-days: 7
+
+  receive-qualified-package:
+    needs: installed-dependency-consumer
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Receive archive from exactly this qualified workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: hive-ledger-qualified-${{ github.sha }}
+          path: ${{ runner.temp }}/received-hive-ledger
+          digest-mismatch: error
+      - name: Verify exact archive checksum, package identity, commit, tree and run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/received-hive-ledger"
+          sha256sum -c SHA256SUMS
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          const git = (...args) => execFileSync('git', ['-C', process.env.GITHUB_WORKSPACE, ...args], { encoding: 'utf8' }).trim();
+          const receipt = JSON.parse(readFileSync('qualification.json', 'utf8'));
+          const line = readFileSync('SHA256SUMS', 'utf8').trim();
+          const pkg = JSON.parse(readFileSync(process.env.GITHUB_WORKSPACE + '/package.json', 'utf8'));
+          assert.equal(receipt.kind, 'hive-ledger-installed-consumer-candidate');
+          assert.equal(receipt.version, 1);
+          assert.equal(receipt.sourceRepository, process.env.GITHUB_REPOSITORY);
+          assert.equal(receipt.testedCommit, git('rev-parse', 'HEAD'));
+          assert.equal(receipt.testedTree, git('rev-parse', 'HEAD^{tree}'));
+          assert.equal(receipt.workflowRunId, process.env.GITHUB_RUN_ID);
+          assert.equal(receipt.package, pkg.name);
+          assert.equal(receipt.packageVersion, pkg.version);
+          assert.equal(receipt.artifact, 'hive-ledger.tgz');
+          assert.equal(receipt.artifactSha256, line.slice(0, 64));
+          assert.match(receipt.artifactSha256, /^[a-f0-9]{64}$/u);
+          NODE
