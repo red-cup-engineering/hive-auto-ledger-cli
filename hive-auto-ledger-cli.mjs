@@ -173,13 +173,25 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   if (!Array.isArray(heBalanceRows)) {
     throw new TypeError("hive-auto-ledger-cli: invalid Hive-Engine balances response");
   }
-  const hiveEngineChainBalances = {};
+  // The provider's balances table is keyed by (account, symbol). A repeated
+  // symbol is disputed source evidence, never an instruction to select the
+  // last row as this wallet's closing balance. Use a Map while admitting rows
+  // so even JavaScript object-prototype property names cannot defeat the
+  // duplicate check or silently disappear from the result.
+  const balancesBySymbol = new Map();
   for (const row of heBalanceRows) {
     if (!row || row.account !== account) {
       throw new Error("hive-auto-ledger-cli: Hive-Engine account identity mismatch from balances provider");
     }
-    hiveEngineChainBalances[row.symbol] = plainDecimal(row.balance);
+    if (typeof row.symbol !== "string" || !row.symbol.trim()) {
+      throw new TypeError("hive-auto-ledger-cli: invalid Hive-Engine balance symbol");
+    }
+    if (balancesBySymbol.has(row.symbol)) {
+      throw new Error("hive-auto-ledger-cli: duplicate Hive-Engine balance for one symbol");
+    }
+    balancesBySymbol.set(row.symbol, plainDecimal(row.balance));
   }
+  const hiveEngineChainBalances = Object.fromEntries(balancesBySymbol);
 
   const custody = custodyAccountsFor(account);
   const chainClosingBalances = {
