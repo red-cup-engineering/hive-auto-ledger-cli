@@ -136,6 +136,22 @@ test("packed Hive ledger package imports without a repo root and writes only to 
         /Hive-Engine account identity mismatch/,
       );
       assert.equal(engineReads, 2, "the provider response must be checked on every requested derivation");
+      // Unattributed and structurally missing balance responses cannot claim
+      // custody merely because the endpoint was queried with the right wallet.
+      await assert.rejects(
+        ledger.deriveLedgerForAccount({ account: "emsenn0", rangeEnd: "2026-10-22" }, {
+          ...foreignEngineDeps,
+          fetchHiveEngineBalancesImpl: async () => [{ symbol: "MUSIC", balance: "42" }],
+        }),
+        /Hive-Engine account identity mismatch/,
+      );
+      await assert.rejects(
+        ledger.deriveLedgerForAccount({ account: "emsenn0", rangeEnd: "2026-10-22" }, {
+          ...foreignEngineDeps,
+          fetchHiveEngineBalancesImpl: async () => null,
+        }),
+        /invalid Hive-Engine balances response/,
+      );
 
       let written;
       const result = await ledger.runHiveAutoLedger(
