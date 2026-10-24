@@ -67,7 +67,7 @@ test("packed Hive ledger package imports without a repo root and writes only to 
       );
       await assert.rejects(
         ledger.runHiveAutoLedger({account:"emsenn0",rangeEnd:"2026-10-22",out:"   ",environment:{}}, refuseDeps),
-        /nonempty --out/,
+        /--out must be a nonempty/,
       );
       assert.equal(invoked, 0, "source provider must not run before valid write custody");
       let written;
