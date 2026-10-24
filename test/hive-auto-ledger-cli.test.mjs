@@ -302,25 +302,36 @@ test("runHiveAutoLedger: a rejected check never replaces the last accepted ledge
   }
 });
 
-test("runHiveAutoLedger: failed farolfi reports refuse delivery instead of returning success", async () => {
+test("runHiveAutoLedger: failed farolfi reports preserve accepted evidence and clean candidates", async () => {
+  const { readFile, writeFile, readdir } = await import("node:fs/promises");
   const account = { name: "emsenn0", created: "2026-01-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
   for (const commandToFail of ["bal", "valuation"]) {
+    const directory = await mkdtemp(join(tmpdir(), "hive-ledger-report-refusal-"));
+    const out = join(directory, "ledger.beancount");
+    const accepted = "; previously accepted evidence; do not replace after failed reports\n";
+    await writeFile(out, accepted, "utf8");
     const commands = [];
-    await assert.rejects(
-      runHiveAutoLedger({ account: account.name, rangeEnd: "2026-10-23", out: join(tmpdir(), "farolfi-report-failure.beancount") }, {
-        clientFactory: fakeClientFactory(account),
-        readHiveHistoryImpl: async () => ({ operations: [] }),
-        readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
-        fetchHiveEngineBalancesImpl: async () => [],
-        writeFileTextImpl: async () => {},
-        checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
-        runFarolfiReportImpl: async (command) => {
-          commands.push(command);
-          return { command, exitCode: command === commandToFail ? 3 : 0, text: "" };
-        },
-      }),
-      new RegExp(`farolfi ${commandToFail} report failed.*exit code 3`),
-    );
-    assert.deepEqual(commands, commandToFail === "bal" ? ["bal"] : ["bal", "valuation"]);
+    try {
+      await assert.rejects(
+        runHiveAutoLedger({ account: account.name, rangeEnd: "2026-10-23", out }, {
+          clientFactory: fakeClientFactory(account),
+          readHiveHistoryImpl: async () => ({ operations: [] }),
+          readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+          fetchHiveEngineBalancesImpl: async () => [],
+          checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
+          runFarolfiReportImpl: async (command, ledgerPath) => {
+            assert.notEqual(ledgerPath, out, "unaccepted accounting must run only against the candidate");
+            commands.push(command);
+            return { command, exitCode: command === commandToFail ? 3 : 0, text: "" };
+          },
+        }),
+        new RegExp(`farolfi ${commandToFail} report failed.*exit code 3`),
+      );
+      assert.deepEqual(commands, commandToFail === "bal" ? ["bal"] : ["bal", "valuation"]);
+      assert.equal(await readFile(out, "utf8"), accepted, "failed reporting must preserve the previously accepted ledger");
+      assert.deepEqual(await readdir(directory), ["ledger.beancount"], "failed candidate must not leave leaked journal files");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });
