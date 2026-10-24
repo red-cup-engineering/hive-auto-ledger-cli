@@ -288,7 +288,7 @@ test("runHiveAutoLedger: writes the ledger, runs bean-check, and runs farolfi's 
   const dir = await mkdtemp(join(tmpdir(), "hive-auto-ledger-test-"));
   const out = join(dir, "ledger.beancount");
   try {
-    const chainAccount = { name: "emsenn0", created: "2026-06-01T00:00:00", balance: "1.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
+    const chainAccount = { name: "emsenn0", created: "2026-06-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
     const result = await runHiveAutoLedger(
       { account: "emsenn0", rangeStart: "2026-06-01", rangeEnd: "2026-09-01", out },
       {
