@@ -280,18 +280,42 @@ export async function runHiveAutoLedger(options, deps = {}) {
   // Beancount comments preserve the observation carrier in the same delivered artifact;
   // they are evidence, not postings or an assertion that every resource was accounted for.
   const ledgerText = `${composed.ledgerResult.ledgerText}\n; hive-ledger-evidence ${JSON.stringify(evidence)}\n`;
-  await (deps.writeFileTextImpl ?? writeFileText)(out, ledgerText);
-  const check = (deps.checkLedgerImpl ?? checkLedger)(out);
+  // Financial evidence is not accepted merely because it can be written. Both
+  // accounting checks and reports must succeed against the exact candidate
+  // BEFORE publishing it at the caller's committed destination.
+  //
+  // Keep the candidate beside the destination: Farolfi includes are resolved
+  // relative to the journal, and a source-store ancestor is never implied.
+  // The original file writer owns exclusive, durable, atomic file creation.
+  const candidate = join(dirname(out), `.${basename(out)}.${randomUUID()}.candidate.beancount`);
+  const write = deps.writeFileTextImpl ?? writeFileText;
   const runFarolfi = deps.runFarolfiReportImpl ?? runFarolfiReport;
-  const balance = await runFarolfi("bal", out);
-  if (balance?.exitCode !== 0) {
-    throw new Error(`hive-auto-ledger-cli: farolfi bal report failed (exit code ${String(balance?.exitCode)})`);
+  let ownsCandidate = false;
+  try {
+    await write(candidate, ledgerText, { flag: "wx" });
+    ownsCandidate = true;
+    const check = await (deps.checkLedgerImpl ?? checkLedger)(candidate);
+    if (check?.ok !== true) {
+      throw new Error("hive-auto-ledger-cli: ledger check failed");
+    }
+    const balance = await runFarolfi("bal", candidate);
+    if (balance?.exitCode !== 0) {
+      throw new Error(`hive-auto-ledger-cli: farolfi bal report failed (exit code ${String(balance?.exitCode)})`);
+    }
+    const valuation = await runFarolfi("valuation", candidate);
+    if (valuation?.exitCode !== 0) {
+      throw new Error(`hive-auto-ledger-cli: farolfi valuation report failed (exit code ${String(valuation?.exitCode)})`);
+    }
+    // Use the original source-owned atomic writer for the final replacement:
+    // it preserves existing permissions and filesystem durability semantics.
+    // Do not rename here and silently bypass that source-owned contract.
+    await write(out, ledgerText);
+    return { ...composed, out, coverage, evidence, ledgerText, check, balanceReport: balance, valuationReport: valuation };
+  } finally {
+    // An unsuccessful exclusive create cannot establish ownership; never
+    // delete a path the writer did not explicitly report it had published.
+    if (ownsCandidate) await rm(candidate, { force: true });
   }
-  const valuation = await runFarolfi("valuation", out);
-  if (valuation?.exitCode !== 0) {
-    throw new Error(`hive-auto-ledger-cli: farolfi valuation report failed (exit code ${String(valuation?.exitCode)})`);
-  }
-  return { ...composed, out, coverage, evidence, ledgerText, check, balanceReport: balance, valuationReport: valuation };
 }
 
 if (import.meta.main) {
