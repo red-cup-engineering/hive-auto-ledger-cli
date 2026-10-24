@@ -6,6 +6,8 @@
  * and valuation reports over it.
  */
 import { parseArgs } from "node:util";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { writeFileText } from "@red-cup-engineering/computer-file-engineering-services-section/write-file";
 import { HiveClient } from "@red-cup-engineering/hive-blockchain-client-service";
