@@ -198,6 +198,28 @@ test("packed Hive ledger package imports without a repo root and writes only to 
       ), /Hive-Engine history account identity mismatch/);
       assert.equal(partialWrites, 0, "partial history cannot overwrite a previous ledger");
 
+      // A real packed import must refuse a source-declared page gap before
+      // any candidate write, even if balance and reporting mocks would pass.
+      let disputedWrites = 0;
+      let disputedChecks = 0;
+      await assert.rejects(
+        ledger.runHiveAutoLedger(
+          { account: "emsenn0", rangeEnd: "2026-10-22", out: join(process.env.LEDGER_TMP, "disputed.beancount") },
+          {
+            clientFactory: () => ({ getAccounts: async () => [fake] }),
+            readHiveHistoryImpl: async () => ({ operations: [], refusals: [{ code: "unread-page" }] }),
+            readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+            fetchHiveEngineBalancesImpl: async () => [],
+            writeFileTextImpl: async () => { disputedWrites++; },
+            checkLedgerImpl: () => { disputedChecks++; return { ok: true, report: { ok: true } }; },
+            runFarolfiReportImpl: () => ({ exitCode: 0, text: "" }),
+          },
+        ),
+        /unresolved source evidence/,
+      );
+      assert.equal(disputedWrites, 0, "the packaged distribution must preserve accepted output on disputed coverage");
+      assert.equal(disputedChecks, 0, "disputed source evidence must stop before accounting checks");
+
       let written;
       const result = await ledger.runHiveAutoLedger(
         { account:"emsenn0",rangeEnd:"2026-10-22",recordsDirectory:join(process.env.LEDGER_TMP,"written"),environment:{} },
