@@ -1,4 +1,4 @@
-name: Hive ledger installed-package portability
+name: Hive ledger packed-source portability (mock dependencies)
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
         with:
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -25,5 +25,5 @@ jobs:
           npm run check
           node --check test/hive-auto-ledger-cli.test.mjs
           node --check test/ledger-evidence-export.test.mjs
-      - name: Test actual npm archive import outside the checkout
+      - name: Test packed archive import with isolated mock dependencies (not installed closure)
         run: npm run test:portable
