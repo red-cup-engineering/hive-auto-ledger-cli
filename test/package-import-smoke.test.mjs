@@ -200,11 +200,15 @@ test("packed Hive ledger package imports without a repo root and writes only to 
 
       // A real packed import must refuse a source-declared page gap before
       // any candidate write, even if balance and reporting mocks would pass.
+      const { writeFileSync, readFileSync } = await import("node:fs");
+      const disputedOut = join(process.env.LEDGER_TMP, "disputed.beancount");
+      const existingReceipt = "; independent previously accepted financial evidence\\n";
+      writeFileSync(disputedOut, existingReceipt);
       let disputedWrites = 0;
       let disputedChecks = 0;
       await assert.rejects(
         ledger.runHiveAutoLedger(
-          { account: "emsenn0", rangeEnd: "2026-10-22", out: join(process.env.LEDGER_TMP, "disputed.beancount") },
+          { account: "emsenn0", rangeEnd: "2026-10-22", out: disputedOut },
           {
             clientFactory: () => ({ getAccounts: async () => [fake] }),
             readHiveHistoryImpl: async () => ({ operations: [], refusals: [{ code: "unread-page" }] }),
@@ -219,6 +223,7 @@ test("packed Hive ledger package imports without a repo root and writes only to 
       );
       assert.equal(disputedWrites, 0, "the packaged distribution must preserve accepted output on disputed coverage");
       assert.equal(disputedChecks, 0, "disputed source evidence must stop before accounting checks");
+      assert.equal(readFileSync(disputedOut, "utf8"), existingReceipt, "must retain previously accepted evidence");
 
       let written;
       const result = await ledger.runHiveAutoLedger(
