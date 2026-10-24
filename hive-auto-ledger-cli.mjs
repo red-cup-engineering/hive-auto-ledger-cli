@@ -278,7 +278,13 @@ export async function runHiveAutoLedger(options, deps = {}) {
   const check = (deps.checkLedgerImpl ?? checkLedger)(out);
   const runFarolfi = deps.runFarolfiReportImpl ?? runFarolfiReport;
   const balance = await runFarolfi("bal", out);
+  if (balance?.exitCode !== 0) {
+    throw new Error(`hive-auto-ledger-cli: farolfi bal report failed (exit code ${String(balance?.exitCode)})`);
+  }
   const valuation = await runFarolfi("valuation", out);
+  if (valuation?.exitCode !== 0) {
+    throw new Error(`hive-auto-ledger-cli: farolfi valuation report failed (exit code ${String(valuation?.exitCode)})`);
+  }
   return { ...composed, out, coverage, evidence, ledgerText, check, balanceReport: balance, valuationReport: valuation };
 }
 
