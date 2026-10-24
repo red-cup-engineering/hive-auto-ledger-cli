@@ -75,6 +75,42 @@ test("deriveLedgerForAccount: refuses a provider response for a different Hive a
   assert.equal(downstreamReads, 0);
 });
 
+test("deriveLedgerForAccount: missing or foreign history sources cannot become zero-activity ledger evidence", async () => {
+  const account = "emsenn0";
+  const chainAccount = {
+    name: account, created: "2026-01-01T00:00:00",
+    balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+  };
+  const hive = { account, operations: [], refusals: [] };
+  const engine = { account, entries: [], fills: [], refusals: [] };
+  const cases = [
+    [{ ...hive, operations: undefined }, engine, /invalid Hive history/],
+    [{ ...hive, account: "anotherwallet" }, engine, /Hive history account identity mismatch/],
+    [hive, { ...engine, entries: undefined }, /invalid Hive-Engine history/],
+    [hive, { ...engine, fills: undefined }, /invalid Hive-Engine history/],
+    [hive, { ...engine, account: "anotherwallet" }, /Hive-Engine history account identity mismatch/],
+  ];
+  for (const [mainHistory, engineHistory, expected] of cases) {
+    await assert.rejects(
+      deriveLedgerForAccount({ account, rangeEnd: "2026-10-22" }, {
+        clientFactory: fakeClientFactory(chainAccount),
+        readHiveHistoryImpl: async () => mainHistory,
+        readHiveEngineHistoryImpl: async () => engineHistory,
+        fetchHiveEngineBalancesImpl: async () => [],
+      }), expected,
+    );
+  }
+  let writes = 0;
+  await assert.rejects(runHiveAutoLedger({ account, out: join(tmpdir(), "must-not-publish-unverified-ledger.beancount") }, {
+    clientFactory: fakeClientFactory(chainAccount),
+    readHiveHistoryImpl: async () => ({ operations: undefined }),
+    readHiveEngineHistoryImpl: async () => engine,
+    fetchHiveEngineBalancesImpl: async () => [],
+    writeFileTextImpl: async () => { writes++; },
+  }), /invalid Hive history/);
+  assert.equal(writes, 0, "invalid upstream coverage must not reach durable ledger output");
+});
+
 test("deriveLedgerForAccount: refuses cross-wallet, unattributed and malformed Hive-Engine balances", async () => {
   const account = "emsenn0";
   const chainAccount = {
