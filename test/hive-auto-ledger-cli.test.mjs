@@ -180,8 +180,8 @@ test("deriveLedgerForAccount: rejects duplicate and malformed Hive-Engine balanc
     ...basic,
     fetchHiveEngineBalancesImpl: async () => [good, { ...good, symbol: "STAR", balance: "2.000" }],
   });
-  assert.equal(distinct.chainClosingBalances.hiveEngine.MUSIC, "1");
-  assert.equal(distinct.chainClosingBalances.hiveEngine.STAR, "2");
+  assert.equal(distinct.chainClosingBalances.hiveEngine.MUSIC, "1.000");
+  assert.equal(distinct.chainClosingBalances.hiveEngine.STAR, "2.000");
 });
 
 test("deriveLedgerForAccount: back-derives an opening balance for a bounded window from the chain's current balance", async () => {
