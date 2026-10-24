@@ -153,6 +153,27 @@ test("packed Hive ledger package imports without a repo root and writes only to 
         /invalid Hive-Engine balances response/,
       );
 
+      // A valid provider query can still return a partial or cross-wallet
+      // history: the packed module must never reinterpret that as no activity.
+      let partialWrites = 0;
+      const historyDeps = {
+        clientFactory: () => ({ getAccounts: async () => [fake] }),
+        readHiveHistoryImpl: async () => ({ operations: undefined }),
+        readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+        fetchHiveEngineBalancesImpl: async () => [],
+        writeFileTextImpl: async () => { partialWrites++; },
+      };
+      await assert.rejects(ledger.runHiveAutoLedger(
+        { account: "emsenn0", out: join(process.env.LEDGER_TMP, "partial.beancount") },
+        historyDeps,
+      ), /invalid Hive history/);
+      await assert.rejects(ledger.deriveLedgerForAccount(
+        { account: "emsenn0" },
+        { ...historyDeps, readHiveHistoryImpl: async () => ({ operations: [] }),
+          readHiveEngineHistoryImpl: async () => ({ account: "anotherwallet", entries: [], fills: [] }) },
+      ), /Hive-Engine history account identity mismatch/);
+      assert.equal(partialWrites, 0, "partial history cannot overwrite a previous ledger");
+
       let written;
       const result = await ledger.runHiveAutoLedger(
         { account:"emsenn0",rangeEnd:"2026-10-22",recordsDirectory:join(process.env.LEDGER_TMP,"written"),environment:{} },
