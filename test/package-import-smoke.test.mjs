@@ -112,6 +112,31 @@ test("packed Hive ledger package imports without a repo root and writes only to 
       );
       assert.equal(incorrectSourceReads, 0, "mismatched identity must stop before history reads or writing");
 
+      // The Hive-Engine balance endpoint selects by account, but a provider
+      // reply must prove that its returned rows belong to the requested wallet.
+      // Otherwise unrelated token balances can contaminate exported evidence.
+      let engineReads = 0;
+      const foreignEngineDeps = {
+        clientFactory: () => ({ getAccounts: async () => [fake] }),
+        readHiveHistoryImpl: async () => ({ operations: [] }),
+        readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+        fetchHiveEngineBalancesImpl: async (accounts) => {
+          engineReads++;
+          assert.deepEqual(accounts, ["emsenn0"]);
+          return [{ account: "unrelatedwallet", symbol: "MUSIC", balance: "42" }];
+        },
+        writeFileTextImpl: async () => { throw new Error("must not write foreign wallet evidence"); },
+      };
+      await assert.rejects(
+        ledger.deriveLedgerForAccount({ account: "emsenn0", rangeEnd: "2026-10-22" }, foreignEngineDeps),
+        /Hive-Engine account identity mismatch/,
+      );
+      await assert.rejects(
+        ledger.runHiveAutoLedger({ account: "emsenn0", rangeEnd: "2026-10-22", out: join(process.env.LEDGER_TMP, "foreign.beancount") }, foreignEngineDeps),
+        /Hive-Engine account identity mismatch/,
+      );
+      assert.equal(engineReads, 2, "the provider response must be checked on every requested derivation");
+
       let written;
       const result = await ledger.runHiveAutoLedger(
         { account:"emsenn0",rangeEnd:"2026-10-22",recordsDirectory:join(process.env.LEDGER_TMP,"written"),environment:{} },
