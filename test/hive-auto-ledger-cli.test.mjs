@@ -234,3 +234,26 @@ test("runHiveAutoLedger: writes the ledger, runs bean-check, and runs farolfi's 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("runHiveAutoLedger: failed farolfi reports refuse delivery instead of returning success", async () => {
+  const account = { name: "emsenn0", created: "2026-01-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
+  for (const commandToFail of ["bal", "valuation"]) {
+    const commands = [];
+    await assert.rejects(
+      runHiveAutoLedger({ account: account.name, rangeEnd: "2026-10-23", out: join(tmpdir(), "farolfi-report-failure.beancount") }, {
+        clientFactory: fakeClientFactory(account),
+        readHiveHistoryImpl: async () => ({ operations: [] }),
+        readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+        fetchHiveEngineBalancesImpl: async () => [],
+        writeFileTextImpl: async () => {},
+        checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
+        runFarolfiReportImpl: async (command) => {
+          commands.push(command);
+          return { command, exitCode: command === commandToFail ? 3 : 0, text: "" };
+        },
+      }),
+      new RegExp(`farolfi ${commandToFail} report failed.*exit code 3`),
+    );
+    assert.deepEqual(commands, commandToFail === "bal" ? ["bal"] : ["bal", "valuation"]);
+  }
+});
