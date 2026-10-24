@@ -157,6 +157,8 @@ export async function deriveLedgerForAccount(options, deps = {}) {
     readHiveEngineHistoryImpl({ account, nodes: heNodes, fillNodes: heFillNodes, from, to }),
     fetchHiveEngineBalancesImpl([account]),
   ]);
+  if (hiveHistory?.account !== undefined && hiveHistory.account !== account) throw new Error("hive-auto-ledger-cli: Hive history account identity mismatch");
+  if (heHistory?.account !== undefined && heHistory.account !== account) throw new Error("hive-auto-ledger-cli: Hive-Engine history account identity mismatch");
   if (!Array.isArray(hiveHistory?.operations)) throw new TypeError("hive-auto-ledger-cli: invalid Hive history response");
   if (!Array.isArray(heHistory?.entries) || !Array.isArray(heHistory?.fills)) throw new TypeError("hive-auto-ledger-cli: invalid Hive-Engine history response");
   // Liquid balance only: the custody account this service tracks holds the *liquid* position;
