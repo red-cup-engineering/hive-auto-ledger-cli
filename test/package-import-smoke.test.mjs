@@ -82,6 +82,30 @@ test("packed Hive ledger package imports without a repo root and writes only to 
         await assert.rejects(ledger.runHiveAutoLedger({...options,out:join(process.env.LEDGER_TMP,"named.beancount")}, refuseDeps), message);
       }
       assert.equal(invoked, 0, "source provider must not run before valid account, range and write custody");
+      // A provider answering with a different account must never be accepted as
+      // the requested wallet, even when it returns otherwise plausible balances.
+      // The history readers and writer must not run against a mixed identity.
+      let incorrectSourceReads = 0;
+      const wrongAccount = { ...fake, name: "unrelatedwallet" };
+      const mismatchDeps = {
+        clientFactory: () => ({ getAccounts: async () => [wrongAccount] }),
+        readHiveHistoryImpl: async () => { incorrectSourceReads++; return { operations: [] }; },
+        readHiveEngineHistoryImpl: async () => { incorrectSourceReads++; return { entries: [], fills: [] }; },
+        fetchHiveEngineBalancesImpl: async () => { incorrectSourceReads++; return []; },
+        writeFileTextImpl: async () => { incorrectSourceReads++; },
+        checkLedgerImpl: () => ({ ok: true }),
+        runFarolfiReportImpl: () => ({ text: "", exitCode: 0 }),
+      };
+      await assert.rejects(
+        ledger.deriveLedgerForAccount({ account: "emsenn0", rangeEnd: "2026-10-22" }, mismatchDeps),
+        /account identity mismatch/,
+      );
+      await assert.rejects(
+        ledger.runHiveAutoLedger({ account: "emsenn0", rangeEnd: "2026-10-22", out: join(process.env.LEDGER_TMP, "claimed.beancount") }, mismatchDeps),
+        /account identity mismatch/,
+      );
+      assert.equal(incorrectSourceReads, 0, "mismatched identity must stop before history reads or writing");
+
       let written;
       const result = await ledger.runHiveAutoLedger(
         { account:"emsenn0",rangeEnd:"2026-10-22",recordsDirectory:join(process.env.LEDGER_TMP,"written"),environment:{} },
