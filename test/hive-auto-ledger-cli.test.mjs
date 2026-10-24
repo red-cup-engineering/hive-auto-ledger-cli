@@ -372,3 +372,46 @@ test("runHiveAutoLedger: failed farolfi reports preserve accepted evidence and c
     }
   }
 });
+
+test("runHiveAutoLedger: unresolved source coverage cannot overwrite accepted financial evidence", async () => {
+  const { readFile, writeFile, readdir } = await import("node:fs/promises");
+  const account = "emsenn0";
+  const cases = [
+    { label: "mainchain read refusal", hiveRefusals: [{ code: "page-gap" }] },
+    { label: "Hive-Engine read refusal", engineRefusals: [{ code: "history-page-gap" }] },
+    { label: "contradictory chain closing balance", closingHive: "3.000 HIVE" },
+  ];
+  for (const scenario of cases) {
+    const directory = await mkdtemp(join(tmpdir(), "hive-ledger-unresolved-"));
+    const out = join(directory, "ledger.beancount");
+    const accepted = "; previously accepted ledger; do not replace with unresolved accounting\n";
+    await writeFile(out, accepted, "utf8");
+    let checks = 0;
+    let reports = 0;
+    try {
+      const chainAccount = {
+        name: account, created: "2026-01-01T00:00:00",
+        balance: scenario.closingHive ?? "0.000 HIVE",
+        hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+      };
+      await assert.rejects(
+        runHiveAutoLedger({ account, rangeEnd: "2026-10-24", out }, {
+          clientFactory: fakeClientFactory(chainAccount),
+          readHiveHistoryImpl: async () => ({ operations: [], refusals: scenario.hiveRefusals ?? [] }),
+          readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [], refusals: scenario.engineRefusals ?? [] }),
+          fetchHiveEngineBalancesImpl: async () => [],
+          checkLedgerImpl: () => { checks++; return { ok: true, report: { ok: true } }; },
+          runFarolfiReportImpl: () => { reports++; return { exitCode: 0, text: "" }; },
+        }),
+        /unresolved source evidence/,
+        scenario.label,
+      );
+      assert.equal(checks, 0, scenario.label + ": no candidate may reach accounting checks");
+      assert.equal(reports, 0, scenario.label + ": no unverified candidate may reach reports");
+      assert.equal(await readFile(out, "utf8"), accepted, scenario.label + ": preserve accepted book");
+      assert.deepEqual(await readdir(directory), ["ledger.beancount"], scenario.label + ": leave no candidate");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
