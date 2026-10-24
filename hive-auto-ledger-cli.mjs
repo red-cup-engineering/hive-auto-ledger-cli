@@ -289,6 +289,15 @@ export async function runHiveAutoLedger(options, deps = {}) {
     recordsDirectory: options.recordsDirectory, environment: options.environment ?? process.env,
   });
   const { coverage, evidence } = composed;
+  // A parseable, balanced journal cannot repair missing pages, disputed
+  // provider observations, derivation refusals or failed chain assertions.
+  // The source-owned evidence carrier records each unresolved observation,
+  // but it must not replace the last accepted financial book. This refusal
+  // occurs before any candidate or final output path is written.
+  if (coverage.unresolved.length > 0) {
+    const sources = [...new Set(coverage.unresolved.map((item) => item.source))].sort().join(", ");
+    throw new Error(`hive-auto-ledger-cli: unresolved source evidence (${coverage.unresolved.length}; ${sources}); refusing to publish ledger`);
+  }
   // Beancount comments preserve the observation carrier in the same delivered artifact;
   // they are evidence, not postings or an assertion that every resource was accounted for.
   const ledgerText = `${composed.ledgerResult.ledgerText}\n; hive-ledger-evidence ${JSON.stringify(evidence)}\n`;
