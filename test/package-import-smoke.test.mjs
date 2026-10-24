@@ -47,6 +47,29 @@ test("packed Hive ledger package imports without a repo root and writes only to 
         environment: { METROPLAT_WEB_DATA_DIR: "/should/not/win" }
       }), join(resolve(process.env.LEDGER_TMP), "override", "2026-10-22-emsenn0-hive-account-ledger.beancount"));
       const fake = { name:"emsenn0",created:"2026-01-01T00:00:00",balance:"0.000 HIVE",hbd_balance:"0.000 HBD",vesting_shares:"0.000000 VESTS" };
+      // Refuse an unselected or blank output *before* asking network providers
+      // or deriving source-dependent ledger state. A failed write destination
+      // must never spend compute or read account history first.
+      let invoked = 0;
+      const refuseDeps = {
+        clientFactory: () => {
+          invoked += 1;
+          return { getAccounts: async () => [fake] };
+        },
+        readHiveHistoryImpl: async () => ({operations:[]}),
+        readHiveEngineHistoryImpl: async () => ({entries:[],fills:[]}),
+        fetchHiveEngineBalancesImpl: async () => [],
+        writeFileTextImpl: async () => { throw new Error("must not write"); },
+      };
+      await assert.rejects(
+        ledger.runHiveAutoLedger({account:"emsenn0",rangeEnd:"2026-10-22",environment:{}}, refuseDeps),
+        /specify --out/,
+      );
+      await assert.rejects(
+        ledger.runHiveAutoLedger({account:"emsenn0",rangeEnd:"2026-10-22",out:"   ",environment:{}}, refuseDeps),
+        /nonempty --out/,
+      );
+      assert.equal(invoked, 0, "source provider must not run before valid write custody");
       let written;
       const result = await ledger.runHiveAutoLedger(
         { account:"emsenn0",rangeEnd:"2026-10-22",recordsDirectory:join(process.env.LEDGER_TMP,"written"),environment:{} },
