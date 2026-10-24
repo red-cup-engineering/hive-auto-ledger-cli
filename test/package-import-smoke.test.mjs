@@ -153,6 +153,30 @@ test("packed Hive ledger package imports without a repo root and writes only to 
         /invalid Hive-Engine balances response/,
       );
 
+      // Hive-Engine's balance table is keyed by wallet and token symbol.
+      // The actual packaged module must not silently take the last matching
+      // row when a provider returns duplicate or unattributed token evidence.
+      let ambiguousWrites = 0;
+      const symbolEvidence = { account: "emsenn0", symbol: "MUSIC", balance: "1.000" };
+      for (const balances of [
+        [symbolEvidence, { ...symbolEvidence, balance: "999.000" }],
+        [symbolEvidence, { ...symbolEvidence }],
+        [{ account: "emsenn0", balance: "12.000" }],
+      ]) {
+        await assert.rejects(
+          ledger.runHiveAutoLedger(
+            { account: "emsenn0", rangeEnd: "2026-10-22", out: join(process.env.LEDGER_TMP, "disputed-symbol.beancount") },
+            {
+              ...foreignEngineDeps,
+              fetchHiveEngineBalancesImpl: async () => balances,
+              writeFileTextImpl: async () => { ambiguousWrites++; },
+            },
+          ),
+          /duplicate Hive-Engine balance|invalid Hive-Engine balance symbol/,
+        );
+      }
+      assert.equal(ambiguousWrites, 0, "conflicting token evidence must not create a candidate or published ledger");
+
       // A valid provider query can still return a partial or cross-wallet
       // history: the packed module must never reinterpret that as no activity.
       let partialWrites = 0;
