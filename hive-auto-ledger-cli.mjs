@@ -219,6 +219,19 @@ export async function deriveLedgerForAccount(options, deps = {}) {
  * @returns {Promise<object>} includes `out`, the path actually written.
  */
 export async function runHiveAutoLedger(options, deps = {}) {
+  // Refuse an unselected output before provider RPCs, two history page-walks,
+  // Hive-Engine balance queries, or ledger derivation. A result with nowhere
+  // to go is not an authorized reason to consume those external resources.
+  // Reuse the existing source-owned output policy, without changing the
+  // eventual filename derived from the independently read chain account.
+  if (options?.out === undefined || options.out === null) {
+    defaultLedgerRecordsPath(options?.account, options?.rangeEnd ?? new Date().toISOString().slice(0, 10), {
+      recordsDirectory: options?.recordsDirectory,
+      environment: options?.environment ?? process.env,
+    });
+  } else if (typeof options.out !== "string" || !options.out.trim()) {
+    throw new TypeError("hive-auto-ledger-cli: --out must be a nonempty file path");
+  }
   const composed = await deriveLedgerForAccount(options, deps);
   const out = options.out ?? defaultLedgerRecordsPath(composed.chainAccount.name, composed.rangeEnd, {
     recordsDirectory: options.recordsDirectory, environment: options.environment ?? process.env,
