@@ -271,6 +271,37 @@ test("runHiveAutoLedger: writes the ledger, runs bean-check, and runs farolfi's 
   }
 });
 
+test("runHiveAutoLedger: a rejected check never replaces the last accepted ledger", async () => {
+  const { readFile, writeFile, readdir } = await import("node:fs/promises");
+  const directory = await mkdtemp(join(tmpdir(), "hive-ledger-receiving-"));
+  const out = join(directory, "ledger.beancount");
+  const accepted = "; accepted independent financial evidence; retain on refusal\n";
+  await writeFile(out, accepted, "utf8");
+  let reports = 0;
+  try {
+    const chainAccount = {
+      name: "emsenn0", created: "2026-01-01T00:00:00",
+      balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+    };
+    await assert.rejects(
+      runHiveAutoLedger({ account: chainAccount.name, rangeEnd: "2026-10-22", out }, {
+        clientFactory: fakeClientFactory(chainAccount),
+        readHiveHistoryImpl: async () => ({ operations: [] }),
+        readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+        fetchHiveEngineBalancesImpl: async () => [],
+        checkLedgerImpl: () => ({ ok: false, report: { ok: false, errors: ["adverse fixture"] } }),
+        runFarolfiReportImpl: async () => { reports++; return { exitCode: 0, text: "" }; },
+      }),
+      /ledger check failed/,
+    );
+    assert.equal(reports, 0, "failed checks cannot proceed to financial reports");
+    assert.equal(await readFile(out, "utf8"), accepted);
+    assert.deepEqual(await readdir(directory), ["ledger.beancount"], "temporary unaccepted journals must be cleaned");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("runHiveAutoLedger: failed farolfi reports refuse delivery instead of returning success", async () => {
   const account = { name: "emsenn0", created: "2026-01-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
   for (const commandToFail of ["bal", "valuation"]) {
