@@ -263,11 +263,20 @@ test("checkLedger: evaluates a Beancount file with the current farolfi check API
   }
 });
 
-test("runFarolfiReport: unsupported command returns a parser error", () => {
-  const result = runFarolfiReport("unknown-ledger-command", "/nonexistent/path.beancount");
-  assert.equal(result.exitCode, 2);
-  assert.equal(typeof result.text, "string");
-  assert.ok(result.text.length > 0);
+test("runFarolfiReport: unsupported command returns a parser error", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hive-auto-ledger-command-test-"));
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    const out = join(dir, "trivial.beancount");
+    await writeFile(out, '2026-01-01 open Assets:Cash\n');
+    // Command dispatch reads its journal first; an absent journal is a separate error.
+    const result = runFarolfiReport("unknown-ledger-command", out);
+    assert.equal(result.exitCode, 2);
+    assert.equal(typeof result.text, "string");
+    assert.ok(result.text.length > 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("runFarolfiReport: resolves the real published farolfi bin and reports exit 0 over a trivial ledger", async () => {
