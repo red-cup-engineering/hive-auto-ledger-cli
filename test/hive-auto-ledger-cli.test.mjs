@@ -7,35 +7,42 @@ import {
   custodyAccountsFor,
   defaultLedgerRecordsPath,
   deriveLedgerForAccount,
-  runBeanCheck,
+  checkLedger,
   runFarolfiReport,
   runHiveAutoLedger,
 } from "../hive-auto-ledger-cli.mjs";
 
-test("defaultLedgerRecordsPath: lands under this section's own data/records/ with a dated name, never an invented data/logs/ledgers/ directory", () => {
-  const path = defaultLedgerRecordsPath("emsenn0", "2026-09-05");
-  assert.ok(path.endsWith("/data/records/hive-account-ledger-records/2026-09-05-emsenn0-hive-account-ledger.beancount"), path);
-  assert.ok(path.includes("/hive-services-section/"), path);
-  assert.ok(!path.includes("/data/logs/"), path);
+test("defaultLedgerRecordsPath: keeps records out of the package and guards unsafe inputs", () => {
+  const recordsDirectory = join(tmpdir(), "portable-hive-records");
+  const path = defaultLedgerRecordsPath("emsenn0", "2026-09-05", { recordsDirectory, environment: {} });
+  assert.equal(path, join(recordsDirectory, "2026-09-05-emsenn0-hive-account-ledger.beancount"));
+  assert.throws(() => defaultLedgerRecordsPath("emsenn0", "2026-09-05", { environment: {} }), /specify --out/);
+  assert.throws(() => defaultLedgerRecordsPath("../outside", "2026-09-05", { recordsDirectory }), /invalid Hive account/);
+  assert.throws(() => defaultLedgerRecordsPath("emsenn0", "2026-02-30", { recordsDirectory }), /valid YYYY-MM-DD/);
+  assert.equal(defaultLedgerRecordsPath("emsenn0", "2026-09-05", {
+    environment: { METROPLAT_WEB_DATA_DIR: recordsDirectory },
+  }), join(recordsDirectory, "records", "hive-account-ledger-records", "2026-09-05-emsenn0-hive-account-ledger.beancount"));
 });
 
-test("runHiveAutoLedger: when out is omitted, writes to defaultLedgerRecordsPath rather than an invented location", async () => {
+test("runHiveAutoLedger: omitted out selects only the configured records directory", async () => {
   const chainAccount = { name: "emsenn0", created: "2026-06-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
+  const recordsDirectory = join(tmpdir(), "hive-records-test");
   let writtenPath = null;
   const result = await runHiveAutoLedger(
-    { account: "emsenn0", rangeStart: "2026-06-01", rangeEnd: "2026-09-05" },
+    { account: "emsenn0", rangeStart: "2026-06-01", rangeEnd: "2026-09-05", recordsDirectory, environment: {} },
     {
       clientFactory: fakeClientFactory(chainAccount),
       readHiveHistoryImpl: async () => ({ operations: [] }),
       readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
       fetchHiveEngineBalancesImpl: async () => [],
-      writeFileTextImpl: async (path, text) => { writtenPath = path; return { path, bytes: Buffer.byteLength(text) }; },
-      runBeanCheckImpl: async () => ({ command: "stub", exitCode: 0, stdout: "", stderr: "" }),
-      runFarolfiReportImpl: async (command) => ({ command, exitCode: 0, text: "", stderr: "" }),
+      writeFileTextImpl: async (path) => { writtenPath = path; },
+      checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
+      runFarolfiReportImpl: async (command) => ({ command, exitCode: 0, text: "" }),
     },
   );
-  assert.equal(result.out, defaultLedgerRecordsPath("emsenn0", "2026-09-05"));
+  assert.equal(result.out, defaultLedgerRecordsPath("emsenn0", "2026-09-05", { recordsDirectory, environment: {} }));
   assert.equal(writtenPath, result.out);
+  assert.equal(result.check.ok, true);
 });
 
 test("custodyAccountsFor: capitalizes the account name into the house naming pattern", () => {
@@ -47,6 +54,135 @@ test("custodyAccountsFor: capitalizes the account name into the house naming pat
 function fakeClientFactory(chainAccount) {
   return () => ({ async getAccounts() { return [chainAccount]; } });
 }
+
+test("deriveLedgerForAccount: refuses a provider response for a different Hive account before downstream reads", async () => {
+  const requested = "emsenn0";
+  const wrongAccount = {
+    name: "unrelatedwallet", created: "2026-01-01T00:00:00",
+    balance: "9.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+  };
+  let downstreamReads = 0;
+  const forbiddenRead = async () => { downstreamReads++; throw new Error("should not query unrelated source"); };
+  await assert.rejects(
+    deriveLedgerForAccount({ account: requested, rangeEnd: "2026-10-22" }, {
+      clientFactory: () => ({ getAccounts: async () => [wrongAccount] }),
+      readHiveHistoryImpl: forbiddenRead,
+      readHiveEngineHistoryImpl: forbiddenRead,
+      fetchHiveEngineBalancesImpl: forbiddenRead,
+    }),
+    /account identity mismatch/,
+  );
+  assert.equal(downstreamReads, 0);
+});
+
+test("deriveLedgerForAccount: missing or foreign history sources cannot become zero-activity ledger evidence", async () => {
+  const account = "emsenn0";
+  const chainAccount = {
+    name: account, created: "2026-01-01T00:00:00",
+    balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+  };
+  const hive = { account, operations: [], refusals: [] };
+  const engine = { account, entries: [], fills: [], refusals: [] };
+  const cases = [
+    [{ ...hive, operations: undefined }, engine, /invalid Hive history/],
+    [{ ...hive, account: "anotherwallet" }, engine, /Hive history account identity mismatch/],
+    [hive, { ...engine, entries: undefined }, /invalid Hive-Engine history/],
+    [hive, { ...engine, fills: undefined }, /invalid Hive-Engine history/],
+    [hive, { ...engine, account: "anotherwallet" }, /Hive-Engine history account identity mismatch/],
+  ];
+  for (const [mainHistory, engineHistory, expected] of cases) {
+    await assert.rejects(
+      deriveLedgerForAccount({ account, rangeEnd: "2026-10-22" }, {
+        clientFactory: fakeClientFactory(chainAccount),
+        readHiveHistoryImpl: async () => mainHistory,
+        readHiveEngineHistoryImpl: async () => engineHistory,
+        fetchHiveEngineBalancesImpl: async () => [],
+      }), expected,
+    );
+  }
+  let writes = 0;
+  await assert.rejects(runHiveAutoLedger({ account, out: join(tmpdir(), "must-not-publish-unverified-ledger.beancount") }, {
+    clientFactory: fakeClientFactory(chainAccount),
+    readHiveHistoryImpl: async () => ({ operations: undefined }),
+    readHiveEngineHistoryImpl: async () => engine,
+    fetchHiveEngineBalancesImpl: async () => [],
+    writeFileTextImpl: async () => { writes++; },
+  }), /invalid Hive history/);
+  assert.equal(writes, 0, "invalid upstream coverage must not reach durable ledger output");
+});
+
+test("deriveLedgerForAccount: refuses cross-wallet, unattributed and malformed Hive-Engine balances", async () => {
+  const account = "emsenn0";
+  const chainAccount = {
+    name: account, created: "2026-01-01T00:00:00",
+    balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+  };
+  const cases = [
+    [{ account: "unrelatedwallet", symbol: "MUSIC", balance: "42" }, /Hive-Engine account identity mismatch/],
+    [{ symbol: "MUSIC", balance: "42" }, /Hive-Engine account identity mismatch/],
+    [null, /Hive-Engine account identity mismatch/],
+  ];
+  for (const [row, expected] of cases) {
+    await assert.rejects(
+      deriveLedgerForAccount({ account, rangeEnd: "2026-10-22" }, {
+        clientFactory: fakeClientFactory(chainAccount),
+        readHiveHistoryImpl: async () => ({ operations: [] }),
+        readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+        fetchHiveEngineBalancesImpl: async (accounts) => {
+          assert.deepEqual(accounts, [account]);
+          return [row];
+        },
+      }),
+      expected,
+    );
+  }
+  await assert.rejects(
+    deriveLedgerForAccount({ account, rangeEnd: "2026-10-22" }, {
+      clientFactory: fakeClientFactory(chainAccount),
+      readHiveHistoryImpl: async () => ({ operations: [] }),
+      readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+      fetchHiveEngineBalancesImpl: async () => null,
+    }),
+    /invalid Hive-Engine balances response/,
+  );
+});
+
+test("deriveLedgerForAccount: rejects duplicate and malformed Hive-Engine balance symbols before publishing accounting evidence", async () => {
+  const account = "emsenn0";
+  const chainAccount = {
+    name: account, created: "2026-01-01T00:00:00",
+    balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+  };
+  const basic = {
+    clientFactory: fakeClientFactory(chainAccount),
+    readHiveHistoryImpl: async () => ({ operations: [] }),
+    readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+  };
+  const good = { account, symbol: "MUSIC", balance: "1.000" };
+  for (const rows of [
+    [good, { ...good, balance: "999.000" }],
+    [good, { ...good }],
+    [{ account, balance: "12.000" }],
+    [{ account, symbol: null, balance: "12.000" }],
+  ]) {
+    let writes = 0;
+    await assert.rejects(
+      runHiveAutoLedger({ account, rangeEnd: "2026-10-22", out: join(tmpdir(), "must-not-publish-ambiguous-hive-engine-balances.beancount") }, {
+        ...basic,
+        fetchHiveEngineBalancesImpl: async () => rows,
+        writeFileTextImpl: async () => { writes++; },
+      }),
+      /duplicate Hive-Engine balance|invalid Hive-Engine balance symbol/,
+    );
+    assert.equal(writes, 0, "a disputed token source must never reach candidate or final publication");
+  }
+  const distinct = await deriveLedgerForAccount({ account, rangeEnd: "2026-10-22" }, {
+    ...basic,
+    fetchHiveEngineBalancesImpl: async () => [good, { ...good, symbol: "STAR", balance: "2.000" }],
+  });
+  assert.equal(distinct.chainClosingBalances.hiveEngine.MUSIC, "1.000");
+  assert.equal(distinct.chainClosingBalances.hiveEngine.STAR, "2.000");
+});
 
 test("deriveLedgerForAccount: back-derives an opening balance for a bounded window from the chain's current balance", async () => {
   const chainAccount = { name: "emsenn0", created: "2021-02-11T21:25:36", balance: "10.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
@@ -113,24 +249,25 @@ test("deriveLedgerForAccount: throws when the chain account does not exist", asy
   ), /account not found/);
 });
 
-test("runBeanCheck: reports a failing exit code rather than throwing", async () => {
-  const execImpl = async () => { const e = new Error("bean-check failed"); e.code = 1; e.stdout = ""; e.stderr = "ERROR: unbalanced"; throw e; };
-  const result = await runBeanCheck("/nonexistent/path.beancount", { execImpl });
-  assert.equal(result.exitCode, 1);
-  assert.ok(result.stderr.includes("unbalanced"));
+test("checkLedger: evaluates a Beancount file with the current farolfi check API", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hive-auto-ledger-check-test-"));
+  const out = join(dir, "trivial.beancount");
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(out, '2026-01-01 open Assets:Cash\n2026-01-01 open Equity:Opening-Balances\n2026-01-01 * "seed"\n  Assets:Cash  1 USD\n  Equity:Opening-Balances  -1 USD\n');
+    const result = checkLedger(out);
+    assert.equal(result.ok, true);
+    assert.equal(result.report.ok, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
-test("runBeanCheck: reports exit 0 on success", async () => {
-  const execImpl = async () => ({ stdout: "", stderr: "" });
-  const result = await runBeanCheck("/some/path.beancount", { execImpl });
-  assert.equal(result.exitCode, 0);
-});
-
-test("runFarolfiReport: reports a failing exit code rather than throwing", async () => {
-  const execImpl = async () => { const e = new Error("farolfi failed"); e.code = 2; e.stdout = ""; e.stderr = "farolfi: unknown command"; throw e; };
-  const result = await runFarolfiReport("bal", "/nonexistent/path.beancount", { execImpl });
+test("runFarolfiReport: unsupported command returns a parser error", () => {
+  const result = runFarolfiReport("unknown-ledger-command", "/nonexistent/path.beancount");
   assert.equal(result.exitCode, 2);
-  assert.ok(result.stderr.includes("unknown command"));
+  assert.equal(typeof result.text, "string");
+  assert.ok(result.text.length > 0);
 });
 
 test("runFarolfiReport: resolves the real published farolfi bin and reports exit 0 over a trivial ledger", async () => {
@@ -151,7 +288,7 @@ test("runHiveAutoLedger: writes the ledger, runs bean-check, and runs farolfi's 
   const dir = await mkdtemp(join(tmpdir(), "hive-auto-ledger-test-"));
   const out = join(dir, "ledger.beancount");
   try {
-    const chainAccount = { name: "emsenn0", created: "2026-06-01T00:00:00", balance: "1.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
+    const chainAccount = { name: "emsenn0", created: "2026-06-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
     const result = await runHiveAutoLedger(
       { account: "emsenn0", rangeStart: "2026-06-01", rangeEnd: "2026-09-01", out },
       {
@@ -159,14 +296,122 @@ test("runHiveAutoLedger: writes the ledger, runs bean-check, and runs farolfi's 
         readHiveHistoryImpl: async () => ({ operations: [] }),
         readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
         fetchHiveEngineBalancesImpl: async () => [],
-        runBeanCheckImpl: async () => ({ command: "stub", exitCode: 0, stdout: "", stderr: "" }),
+        checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
       },
     );
-    assert.equal(result.beanCheck.exitCode, 0);
+    assert.equal(result.check.ok, true);
     assert.ok(result.balanceReport.text.length > 0);
     assert.equal(result.balanceReport.exitCode, 0);
     assert.equal(result.valuationReport.exitCode, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runHiveAutoLedger: a rejected check never replaces the last accepted ledger", async () => {
+  const { readFile, writeFile, readdir } = await import("node:fs/promises");
+  const directory = await mkdtemp(join(tmpdir(), "hive-ledger-receiving-"));
+  const out = join(directory, "ledger.beancount");
+  const accepted = "; accepted independent financial evidence; retain on refusal\n";
+  await writeFile(out, accepted, "utf8");
+  let reports = 0;
+  try {
+    const chainAccount = {
+      name: "emsenn0", created: "2026-01-01T00:00:00",
+      balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+    };
+    await assert.rejects(
+      runHiveAutoLedger({ account: chainAccount.name, rangeEnd: "2026-10-22", out }, {
+        clientFactory: fakeClientFactory(chainAccount),
+        readHiveHistoryImpl: async () => ({ operations: [] }),
+        readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+        fetchHiveEngineBalancesImpl: async () => [],
+        checkLedgerImpl: () => ({ ok: false, report: { ok: false, errors: ["adverse fixture"] } }),
+        runFarolfiReportImpl: async () => { reports++; return { exitCode: 0, text: "" }; },
+      }),
+      /ledger check failed/,
+    );
+    assert.equal(reports, 0, "failed checks cannot proceed to financial reports");
+    assert.equal(await readFile(out, "utf8"), accepted);
+    assert.deepEqual(await readdir(directory), ["ledger.beancount"], "temporary unaccepted journals must be cleaned");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("runHiveAutoLedger: failed farolfi reports preserve accepted evidence and clean candidates", async () => {
+  const { readFile, writeFile, readdir } = await import("node:fs/promises");
+  const account = { name: "emsenn0", created: "2026-01-01T00:00:00", balance: "0.000 HIVE", hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS" };
+  for (const commandToFail of ["bal", "valuation"]) {
+    const directory = await mkdtemp(join(tmpdir(), "hive-ledger-report-refusal-"));
+    const out = join(directory, "ledger.beancount");
+    const accepted = "; previously accepted evidence; do not replace after failed reports\n";
+    await writeFile(out, accepted, "utf8");
+    const commands = [];
+    try {
+      await assert.rejects(
+        runHiveAutoLedger({ account: account.name, rangeEnd: "2026-10-23", out }, {
+          clientFactory: fakeClientFactory(account),
+          readHiveHistoryImpl: async () => ({ operations: [] }),
+          readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [] }),
+          fetchHiveEngineBalancesImpl: async () => [],
+          checkLedgerImpl: () => ({ ok: true, report: { ok: true } }),
+          runFarolfiReportImpl: async (command, ledgerPath) => {
+            assert.notEqual(ledgerPath, out, "unaccepted accounting must run only against the candidate");
+            commands.push(command);
+            return { command, exitCode: command === commandToFail ? 3 : 0, text: "" };
+          },
+        }),
+        new RegExp(`farolfi ${commandToFail} report failed.*exit code 3`),
+      );
+      assert.deepEqual(commands, commandToFail === "bal" ? ["bal"] : ["bal", "valuation"]);
+      assert.equal(await readFile(out, "utf8"), accepted, "failed reporting must preserve the previously accepted ledger");
+      assert.deepEqual(await readdir(directory), ["ledger.beancount"], "failed candidate must not leave leaked journal files");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("runHiveAutoLedger: unresolved source coverage cannot overwrite accepted financial evidence", async () => {
+  const { readFile, writeFile, readdir } = await import("node:fs/promises");
+  const account = "emsenn0";
+  const cases = [
+    { label: "mainchain read refusal", hiveRefusals: [{ code: "page-gap" }] },
+    { label: "Hive-Engine read refusal", engineRefusals: [{ code: "history-page-gap" }] },
+    { label: "contradictory chain closing balance", closingHive: "3.000 HIVE" },
+  ];
+  for (const scenario of cases) {
+    const directory = await mkdtemp(join(tmpdir(), "hive-ledger-unresolved-"));
+    const out = join(directory, "ledger.beancount");
+    const accepted = "; previously accepted ledger; do not replace with unresolved accounting\n";
+    await writeFile(out, accepted, "utf8");
+    let checks = 0;
+    let reports = 0;
+    try {
+      const chainAccount = {
+        name: account, created: "2026-01-01T00:00:00",
+        balance: scenario.closingHive ?? "0.000 HIVE",
+        hbd_balance: "0.000 HBD", vesting_shares: "0.000000 VESTS",
+      };
+      await assert.rejects(
+        runHiveAutoLedger({ account, rangeEnd: "2026-10-24", out }, {
+          clientFactory: fakeClientFactory(chainAccount),
+          readHiveHistoryImpl: async () => ({ operations: [], refusals: scenario.hiveRefusals ?? [] }),
+          readHiveEngineHistoryImpl: async () => ({ entries: [], fills: [], refusals: scenario.engineRefusals ?? [] }),
+          fetchHiveEngineBalancesImpl: async () => [],
+          checkLedgerImpl: () => { checks++; return { ok: true, report: { ok: true } }; },
+          runFarolfiReportImpl: () => { reports++; return { exitCode: 0, text: "" }; },
+        }),
+        /unresolved source evidence/,
+        scenario.label,
+      );
+      assert.equal(checks, 0, scenario.label + ": no candidate may reach accounting checks");
+      assert.equal(reports, 0, scenario.label + ": no unverified candidate may reach reports");
+      assert.equal(await readFile(out, "utf8"), accepted, scenario.label + ": preserve accepted book");
+      assert.deepEqual(await readdir(directory), ["ledger.beancount"], scenario.label + ": leave no candidate");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });
