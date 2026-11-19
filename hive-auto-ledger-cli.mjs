@@ -71,7 +71,7 @@ export function defaultLedgerRecordsPath(account, dateStamp, {
 }
 
 /** The house per-persona custody account names this section's naming pattern already uses. */
-export function custodyAccountsFor(account) {
+export function storageAccountsFor(account) {
   const cap = capitalized(account);
   return {
     hive: `Assets:Digital-Assets:Hive:Custody:${cap}`,
@@ -194,7 +194,7 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   }
   const hiveEngineChainBalances = Object.fromEntries(balancesBySymbol);
 
-  const custody = custodyAccountsFor(account);
+  const storage = storageAccountsFor(account);
   const chainClosingBalances = {
     hive: stripUnitSuffix(chainAccount.balance),
     hbd: stripUnitSuffix(chainAccount.hbd_balance),
@@ -204,7 +204,7 @@ export async function deriveLedgerForAccount(options, deps = {}) {
 
   const baseInput = {
     account, rangeStart, rangeEnd,
-    custodyAccount: custody.hive, hiveEngineCustodyAccount: custody.hiveEngine,
+    custodyAccount: storage.hive, hiveEngineCustodyAccount: storage.hiveEngine,
     hiveOperations: hiveHistory.operations, hiveEngineEntries: heHistory.entries, hiveEngineFills: heHistory.fills,
   };
 
@@ -229,19 +229,19 @@ export async function deriveLedgerForAccount(options, deps = {}) {
     });
     const netDeltaOf = (acct, commodity) => zeroPass.balanceComparison.find((b) => b.account === acct && b.commodity === commodity)?.computedClosing ?? "0";
     openingBalances = {
-      hive: addDecimalStrings([chainClosingBalances.hive, negateDecimalString(netDeltaOf(custody.hive, "HIVE"))]),
-      hbd: addDecimalStrings([chainClosingBalances.hbd, negateDecimalString(netDeltaOf(custody.hive, "HBD"))]),
-      vests: addDecimalStrings([chainClosingBalances.vests, negateDecimalString(netDeltaOf(custody.hive, "VESTS"))]),
+      hive: addDecimalStrings([chainClosingBalances.hive, negateDecimalString(netDeltaOf(storage.hive, "HIVE"))]),
+      hbd: addDecimalStrings([chainClosingBalances.hbd, negateDecimalString(netDeltaOf(storage.hive, "HBD"))]),
+      vests: addDecimalStrings([chainClosingBalances.vests, negateDecimalString(netDeltaOf(storage.hive, "VESTS"))]),
       hiveEngine: Object.fromEntries(
         Object.entries(hiveEngineChainBalances).map(([symbol, chainValue]) => [
-          symbol, addDecimalStrings([chainValue, negateDecimalString(netDeltaOf(custody.hiveEngine, symbol))]),
+          symbol, addDecimalStrings([chainValue, negateDecimalString(netDeltaOf(storage.hiveEngine, symbol))]),
         ]),
       ),
     };
   }
 
   const ledgerResult = deriveHiveAccountLedger({ ...baseInput, openingBalances, chainClosingBalances });
-  const composed = { ledgerResult, hiveHistory, heHistory, chainAccount, chainClosingBalances, openingBalances, custody, rangeStart, rangeEnd };
+  const composed = { ledgerResult, hiveHistory, heHistory, chainAccount, chainClosingBalances, openingBalances, custody: storage, rangeStart, rangeEnd };
   // An accounting check cannot establish source coverage. Carry read refusals and the
   // source observations with the export rather than leaving them in a transient result.
   const unresolved = [
