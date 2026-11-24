@@ -1,0 +1,42 @@
+{
+  "name": "@red-cup-engineering/hive-auto-ledger-cli",
+  "version": "0.1.14-dev.0",
+  "description": "Composed CLI face for the Hive wallet-analyzer lineage: reads one account's mainchain and Hive-Engine history, derives its Beancount ledger, checks it with farolfi, and runs farolfi's balance and valuation reports over it.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/hive-auto-ledger-cli.git"
+  },
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "exports": "./hive-auto-ledger-cli.mjs",
+  "bin": {
+    "hive-auto-ledger-cli": "hive-auto-ledger-cli.mjs"
+  },
+  "files": [
+    "hive-auto-ledger-cli.mjs",
+    "README.md",
+    "package.json"
+  ],
+  "dependencies": {
+    "@red-cup-engineering/metrologic": "^0.22.3",
+    "@red-cup-engineering/derive-hive-account-ledger-service": "^0.1.8",
+    "@red-cup-engineering/farolfi": "^0.6.10",
+    "@red-cup-engineering/computer-file-engineering-services-section": "^0.8.8",
+    "@red-cup-engineering/hive-blockchain-client-service": "^0.1.8",
+    "@red-cup-engineering/read-hive-account-history-service": "^0.1.4",
+    "@red-cup-engineering/read-hive-engine-account-history-service": "^0.1.5",
+    "@red-cup-engineering/exact-number-codec": "^0.1.0"
+  },
+  "scripts": {
+    "check": "node --check hive-auto-ledger-cli.mjs",
+    "pack:dry-run": "npm pack --dry-run --ignore-scripts"
+  },
+  "engines": {
+    "node": ">=24.2.0"
+  },
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/561-group/.github/blob/main/TIPS.md"
+  }
+}
