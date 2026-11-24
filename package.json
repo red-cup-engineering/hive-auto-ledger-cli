@@ -30,6 +30,7 @@
   },
   "scripts": {
     "check": "node --check hive-auto-ledger-cli.mjs",
+    "test": "node --test test/hive-auto-ledger-cli.test.mjs",
     "pack:dry-run": "npm pack --dry-run --ignore-scripts"
   },
   "engines": {

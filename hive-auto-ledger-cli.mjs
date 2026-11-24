@@ -27,6 +27,16 @@ const DEFAULT_HIVE_NODES = ["https://api.hive.blog", "https://api.openhive.netwo
 const DEFAULT_HE_NODES = ["https://accounts.hive-engine.com", "https://history.hive-engine.com"];
 const DEFAULT_HE_FILL_NODES = ["https://api.hive-engine.com/rpc", "https://api2.hive-engine.com/rpc"];
 
+/**
+ * The civil day after `now`, in UTC. Beancount checks a balance assertion at the start of its date,
+ * so an assertion that must see every operation up to a read taken on day D is dated D+1.
+ * @param {Date} now
+ * @returns {string} YYYY-MM-DD
+ */
+export function dayAfter(now) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)).toISOString().slice(0, 10);
+}
+
 function capitalized(name) {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
@@ -122,8 +132,14 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   // Invalid account/range inputs must not start a network or history query,
   // including when this API is imported without any output destination.
   requireHiveAccount(account);
-  const selectedRangeEnd = rangeEndInput ?? new Date().toISOString().slice(0, 10);
+  const today = (deps.now ?? (() => new Date()))().toISOString().slice(0, 10);
+  const selectedRangeEnd = rangeEndInput ?? today;
   requireLedgerDate(selectedRangeEnd);
+  // The closing figures are read from the chain now, so they describe the account as of now and
+  // cannot be asserted against a history that stops at an earlier day.
+  if (selectedRangeEnd < today) {
+    throw new RangeError("hive-auto-ledger-cli: range end is before today; closing balances are read live and cannot be asserted at an earlier end");
+  }
   if (rangeStartInput !== undefined && rangeStartInput !== null) {
     requireLedgerDate(rangeStartInput);
     if (rangeStartInput > selectedRangeEnd) {
@@ -150,24 +166,25 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   const rangeStart = rangeStartInput ?? chainAccount.created.slice(0, 10);
   const rangeEnd = selectedRangeEnd;
   const from = rangeStartInput ? { time: `${rangeStart}T00:00:00.000Z` } : undefined;
-  const to = { time: `${rangeEnd}T00:00:00.000Z` };
+  // No upper bound: the history is read up to the moment of the live balance read, never cut at
+  // midnight of the range end (which would leave the day's operations out of the assertion).
 
   // Independent reads: run concurrently rather than sequentially (a real wall-clock cost cut,
   // not a workaround) — the mainchain history page-walk and the Hive-Engine REST/fill reads
   // share no state.
   const [hiveHistory, heHistory, heBalanceRows] = await Promise.all([
-    readHiveHistoryImpl({ account, nodes: hiveNodes, from, to }),
-    readHiveEngineHistoryImpl({ account, nodes: heNodes, fillNodes: heFillNodes, from, to }),
+    readHiveHistoryImpl({ account, nodes: hiveNodes, from }),
+    readHiveEngineHistoryImpl({ account, nodes: heNodes, fillNodes: heFillNodes, from }),
     fetchHiveEngineBalancesImpl([account]),
   ]);
+  const balanceDate = dayAfter((deps.now ?? (() => new Date()))());
   if (hiveHistory?.account !== undefined && hiveHistory.account !== account) throw new Error("hive-auto-ledger-cli: Hive history account identity mismatch");
   if (heHistory?.account !== undefined && heHistory.account !== account) throw new Error("hive-auto-ledger-cli: Hive-Engine history account identity mismatch");
   if (!Array.isArray(hiveHistory?.operations)) throw new TypeError("hive-auto-ledger-cli: invalid Hive history response");
   if (!Array.isArray(heHistory?.entries) || !Array.isArray(heHistory?.fills)) throw new TypeError("hive-auto-ledger-cli: invalid Hive-Engine history response");
-  // Liquid balance only: the custody account this service tracks holds the *liquid* position;
-  // staked, pending-unstake, and delegated-out quantities move to their own sub-accounts
-  // (derive-hive-account-ledger-service's :Staked/:Pending-Unstake/:Delegated-Out), so comparing
-  // this scope against the chain's combined balance+stake figure would be a scope mismatch.
+  // The liquid balance, the staked, pending-unstake and delegated-out quantities are read as
+  // separate figures: derive-hive-account-ledger-service asserts the whole custody tree as their
+  // sum (a Beancount assertion covers every sub-account) and each sub-account on its own.
   // Hive Engine's balances table carries an account field on every row.
   // A partial or misrouted provider response must not contaminate this wallet's
   // closing balances or the accounting evidence that will be written to disk.
@@ -180,6 +197,9 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   // so even JavaScript object-prototype property names cannot defeat the
   // duplicate check or silently disappear from the result.
   const balancesBySymbol = new Map();
+  const stakeBySymbol = {};
+  const pendingUnstakeBySymbol = {};
+  const delegatedOutBySymbol = {};
   for (const row of heBalanceRows) {
     if (!row || row.account !== account) {
       throw new Error("hive-auto-ledger-cli: Hive-Engine account identity mismatch from balances provider");
@@ -191,6 +211,9 @@ export async function deriveLedgerForAccount(options, deps = {}) {
       throw new Error("hive-auto-ledger-cli: duplicate Hive-Engine balance for one symbol");
     }
     balancesBySymbol.set(row.symbol, plainDecimal(row.balance));
+    stakeBySymbol[row.symbol] = plainDecimal(row.stake ?? "0");
+    pendingUnstakeBySymbol[row.symbol] = plainDecimal(row.pendingUnstake ?? "0");
+    delegatedOutBySymbol[row.symbol] = plainDecimal(row.delegationsOut ?? "0");
   }
   const hiveEngineChainBalances = Object.fromEntries(balancesBySymbol);
 
@@ -199,11 +222,16 @@ export async function deriveLedgerForAccount(options, deps = {}) {
     hive: stripUnitSuffix(chainAccount.balance),
     hbd: stripUnitSuffix(chainAccount.hbd_balance),
     vests: stripUnitSuffix(chainAccount.vesting_shares),
+    hiveSavings: stripUnitSuffix(chainAccount.savings_balance ?? "0.000 HIVE"),
+    hbdSavings: stripUnitSuffix(chainAccount.savings_hbd_balance ?? "0.000 HBD"),
     hiveEngine: hiveEngineChainBalances,
+    hiveEngineStaked: stakeBySymbol,
+    hiveEnginePendingUnstake: pendingUnstakeBySymbol,
+    hiveEngineDelegatedOut: delegatedOutBySymbol,
   };
 
   const baseInput = {
-    account, rangeStart, rangeEnd,
+    account, rangeStart, rangeEnd, balanceDate,
     custodyAccount: custody.hive, hiveEngineCustodyAccount: custody.hiveEngine,
     hiveOperations: hiveHistory.operations, hiveEngineEntries: heHistory.entries, hiveEngineFills: heHistory.fills,
   };
@@ -220,23 +248,27 @@ export async function deriveLedgerForAccount(options, deps = {}) {
   const isWholeHistory = rangeStartInput === undefined || rangeStartInput === null;
   let openingBalances;
   if (isWholeHistory) {
-    openingBalances = { hive: "0", hbd: "0", vests: "0", hiveEngine: Object.fromEntries(Object.keys(hiveEngineChainBalances).map((s) => [s, "0"])) };
+    openingBalances = { hive: "0", hbd: "0", vests: "0", hiveSavings: "0", hbdSavings: "0", hiveEngine: {}, hiveEngineStaked: {}, hiveEnginePendingUnstake: {}, hiveEngineDelegatedOut: {} };
   } else {
+    // A bounded window starts from what the chain held then: each account's chain closing figure
+    // less the net change this window's own operations made to that very account.
     const zeroPass = deriveHiveAccountLedger({
       ...baseInput,
       openingBalances: { hive: "0", hbd: "0", vests: "0", hiveEngine: {} },
       chainClosingBalances,
     });
-    const netDeltaOf = (acct, commodity) => zeroPass.balanceComparison.find((b) => b.account === acct && b.commodity === commodity)?.computedClosing ?? "0";
+    const startFrom = (acct, commodity, chainValue) => addDecimalStrings([chainValue ?? "0", negateDecimalString(zeroPass.accountBalances[acct]?.[commodity] ?? "0")]);
+    const perSymbol = (acct, byChainSymbol) => Object.fromEntries(Object.entries(byChainSymbol).map(([symbol, chainValue]) => [symbol, startFrom(acct, symbol, chainValue)]));
     openingBalances = {
-      hive: addDecimalStrings([chainClosingBalances.hive, negateDecimalString(netDeltaOf(custody.hive, "HIVE"))]),
-      hbd: addDecimalStrings([chainClosingBalances.hbd, negateDecimalString(netDeltaOf(custody.hive, "HBD"))]),
-      vests: addDecimalStrings([chainClosingBalances.vests, negateDecimalString(netDeltaOf(custody.hive, "VESTS"))]),
-      hiveEngine: Object.fromEntries(
-        Object.entries(hiveEngineChainBalances).map(([symbol, chainValue]) => [
-          symbol, addDecimalStrings([chainValue, negateDecimalString(netDeltaOf(custody.hiveEngine, symbol))]),
-        ]),
-      ),
+      hive: startFrom(custody.hive, "HIVE", chainClosingBalances.hive),
+      hbd: startFrom(custody.hive, "HBD", chainClosingBalances.hbd),
+      vests: startFrom(custody.hive, "VESTS", chainClosingBalances.vests),
+      hiveSavings: startFrom(`${custody.hive}:Savings`, "HIVE", chainClosingBalances.hiveSavings),
+      hbdSavings: startFrom(`${custody.hive}:Savings`, "HBD", chainClosingBalances.hbdSavings),
+      hiveEngine: perSymbol(custody.hiveEngine, hiveEngineChainBalances),
+      hiveEngineStaked: perSymbol(`${custody.hiveEngine}:Staked`, stakeBySymbol),
+      hiveEnginePendingUnstake: perSymbol(`${custody.hiveEngine}:Pending-Unstake`, pendingUnstakeBySymbol),
+      hiveEngineDelegatedOut: perSymbol(`${custody.hiveEngine}:Delegated-Out`, delegatedOutBySymbol),
     };
   }
 
